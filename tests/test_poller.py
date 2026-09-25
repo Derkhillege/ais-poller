@@ -173,6 +173,30 @@ def test_stream_reads_every_pushed_message(tmp_path, monkeypatch, caplog):
     assert "malformed message" in caplog.text
 
 
+def _push_msg(*ids: str) -> str:
+    """A featureStream notification as EuRIS sends it: each feature JSON-encoded as a string."""
+    params = [json.dumps({"type": "Feature", "id": i, "properties": {"Id": i}}) for i in ids]
+    return json.dumps({"jsonrpc": "2.0", "method": "featureStream", "params": params})
+
+
+def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
+    """After the snapshot, featureStream notifications are written as records, not ignored."""
+    area = Area("north", None, tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 10, {"id": 1, "method": "StreamFeatures"}, (area,))
+    stop = threading.Event()
+    ws = StreamingWebSocket(stop, [_features_msg("a"), _push_msg("181"), _push_msg("26", "39")])
+    monkeypatch.setattr(poller, "connect", lambda _url: ws)
+
+    with caplog.at_level("INFO", logger="ais_poller"):
+        poller.stream_area(config, area, stop)
+
+    lines = [json.loads(line) for line in area.output_path.read_text().splitlines()]
+    assert [r["id"] for r in lines] == ["a", "181", "26", "39"]
+    assert lines[1]["properties"] == {"Id": "181"}
+    assert all("requested_at" in r and r["area"] == "north" for r in lines)
+    assert "non-feature message" not in caplog.text
+
+
 def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch):
     area = Area("north", None, tmp_path / "north.ndjson")
     config = Config("wss://example/ws", 10, {"id": 5, "method": "StreamFeatures"}, (area,))
