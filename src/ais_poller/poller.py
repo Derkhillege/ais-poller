@@ -35,6 +35,20 @@ def _features(message: Any) -> list[Any] | None:
     return features if isinstance(features, list) else None
 
 
+def _pushed_features(message: Any) -> list[Any] | None:
+    """Return the features of a featureStream notification, or None for any other message.
+
+    EuRIS pushes updates as {"method": "featureStream", "params": ["<feature JSON>", ...]},
+    each feature encoded as a JSON string.
+    """
+    if not isinstance(message, dict) or message.get("method") != "featureStream":
+        return None
+    params = message.get("params")
+    if not isinstance(params, list):
+        return None
+    return [json.loads(p) if isinstance(p, str) else p for p in params]
+
+
 def _append_features(features: list[Any], output_path: Path, area: str | None) -> None:
     """Stamp features with the receive time (and area) and append them as NDJSON."""
     received_at = datetime.now(UTC).isoformat()
@@ -106,7 +120,11 @@ def _drain(websocket: ClientConnection, config: Config, area: Area, stop: thread
         if raw is not None:
             messages += 1
             try:
-                features = _features(json.loads(raw))
+                message = json.loads(raw)
+                # Snapshot answer to the subscribe first, then one notification per update.
+                features = _features(message)
+                if features is None:
+                    features = _pushed_features(message)
             except json.JSONDecodeError as e:
                 log.error("[%s] malformed message, skipping: %s", area.name, e)
             else:
@@ -114,7 +132,7 @@ def _drain(websocket: ClientConnection, config: Config, area: Area, stop: thread
                     _append_features(features, area.output_path, area.name)
                     records += len(features)
                 else:
-                    # The push format isn't known yet; show the first few of each connection.
+                    # Unexpected message type; show the first few of each connection.
                     unknown += 1
                     level = logging.INFO if unknown <= _UNKNOWN_SAMPLES else logging.DEBUG
                     log.log(level, "[%s] non-feature message: %.500s", area.name, raw)
