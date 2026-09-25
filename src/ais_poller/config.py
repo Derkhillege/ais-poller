@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 _AREA_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+FORMATS = ("ndjson", "parquet")
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Area:
 
     name: str
     bbox: tuple[float, float, float, float]  # (minLat, minLon, maxLat, maxLon)
-    output_path: Path
+    output_path: Path  # NDJSON file, or the Parquet dataset directory
     id: int | None = None
 
 
@@ -42,6 +43,8 @@ class Config:
     interval: int
     request_template: dict[str, Any]
     areas: tuple[Area, ...]
+    format: str = "ndjson"
+    rotate: int = 3600  # seconds per Parquet file
     duration: float | None = None
 
     @property
@@ -77,6 +80,8 @@ def load_config(
     wss_url: str | None = None,
     interval: int | None = None,
     output_path: Path | None = None,
+    fmt: str | None = None,
+    rotate: int | None = None,
     duration: float | None = None,
 ) -> Config:
     """Load and validate a TOML config; explicit arguments (CLI flags) override file values."""
@@ -107,6 +112,15 @@ def load_config(
         raise SystemExit(f"{path}: 'request.id' must be an integer (or omitted)")
 
     output_path = output_path or Path(data.get("output_path", "."))
+    fmt = fmt or data.get("format", "ndjson")
+    if fmt not in FORMATS:
+        raise SystemExit(f"{path}: 'format' (or --format) must be one of {', '.join(FORMATS)}")
+
+    rotate = rotate if rotate is not None else data.get("rotate", 3600)
+    if not isinstance(rotate, int) or isinstance(rotate, bool) or rotate <= 0:
+        raise SystemExit(f"{path}: 'rotate' (or --rotate) must be a positive integer")
+
+    output_path = output_path or Path(data.get("output_path", "."))
     raw_areas = data.get("areas")
     if not isinstance(raw_areas, list) or not raw_areas:
         raise SystemExit(f"{path}: at least one [[areas]] entry is required")
@@ -124,14 +138,19 @@ def load_config(
 
         area_id = raw.get("id")
 
-        output = Path(raw["output"]) if "output" in raw else output_path / f"{name}.ndjson"
+        if "output" in raw:
+            output = Path(raw["output"])
+        elif fmt == "parquet":
+            output = output_path / f"area={name}"
+        else:
+            output = output_path / f"{name}.ndjson"
         areas.append(Area(name, _check_bbox(raw.get("bbox"), where), output, id=area_id))
 
     outputs = [a.output_path.resolve() for a in areas]
     if len(set(outputs)) != len(outputs):
-        raise SystemExit(f"{path}: areas must write to distinct output files")
+        raise SystemExit(f"{path}: areas must write to distinct outputs")
 
-    return Config(wss_url, interval, request, tuple(areas), duration=duration)
+    return Config(wss_url, interval, request, tuple(areas), fmt, rotate, duration=duration)
 
 
 def _check_bbox(bbox: Any, where: str) -> tuple[float, float, float, float]:

@@ -42,7 +42,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    poll = sub.add_parser("poll", help="poll the WebSocket and append features as NDJSON (default)")
+    poll = sub.add_parser(
+        "poll", help="poll the WebSocket and write NDJSON or GeoParquet (default command)"
+    )
     poll.add_argument(
         "-c",
         "--config",
@@ -70,16 +72,28 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="output directory for the area files (overrides output_path)",
     )
+    poll.add_argument(
+        "--format",
+        choices=["ndjson", "parquet"],
+        help="ndjson: raw features, uncompressed; parquet: parsed records as zstd GeoParquet "
+        "(overrides format, default ndjson)",
+    )
+    poll.add_argument(
+        "--rotate", type=int, help="seconds per Parquet file (overrides rotate, default 3600)"
+    )
 
     parse = sub.add_parser("parse", help="convert poller NDJSON into flat vessel records")
     parse.add_argument("input", type=Path, help="NDJSON file written by `ais-poller poll`")
     parse.add_argument("-o", "--output", type=Path, help="output file (default: stdout)")
     parse.add_argument("--format", choices=["csv", "ndjson"], default="csv", help="default: csv")
 
-    inspect = sub.add_parser(
-        "inspect", help="summarise poller NDJSON files (ticks, gaps, areas, extent)"
+    inspect = sub.add_parser("inspect", help="summarise poller output (ticks, gaps, areas, extent)")
+    inspect.add_argument(
+        "files",
+        nargs="+",
+        type=Path,
+        help="NDJSON or Parquet files, or Parquet dataset directories, written by `poll`",
     )
-    inspect.add_argument("files", nargs="+", type=Path, help="NDJSON files written by `poll`")
     inspect.add_argument("--json", action="store_true", help="machine-readable output")
 
     lic = sub.add_parser("license", help="show this program's GPL licensing notice")
@@ -103,6 +117,8 @@ def _poll(args: argparse.Namespace) -> int:
         interval=getattr(args, "interval", None),
         output_path=getattr(args, "output", None),
         duration=getattr(args, "duration", None),
+        fmt=getattr(args, "format", None),
+        rotate=getattr(args, "rotate", None),
     )
     run(config)
     return 0

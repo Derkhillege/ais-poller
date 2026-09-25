@@ -1,10 +1,11 @@
 # ais-poller
 
-Polls the EuRIS AIS WebSocket and appends every returned vessel feature as one JSON line
-(NDJSON) to a file, then parses those files into flat vessel records (CSV or NDJSON).
+Polls the EuRIS AIS WebSocket and writes every returned vessel feature either as one raw JSON
+line (NDJSON) per feature, or parsed on arrival into flat vessel records in compressed
+GeoParquet. NDJSON files are converted afterwards with `parse` (CSV or NDJSON).
 
-Both commands stream line by line, so memory stays flat no matter how long the poller runs
-or how large the output file grows.
+Everything streams, so memory stays flat no matter how long the poller runs or how large the
+output grows.
 
 ## Install
 
@@ -36,10 +37,49 @@ For a single area, list just one `[[areas]]` entry.
 | `--url`          | `url`        | WebSocket URL                                            |
 | `--interval`     | `interval`   | Seconds between requests (streaming: between summary logs) |
 | `-o/--output`    | `output_path` | Output directory                                         |
+| `--format`       | `format`     | `ndjson` (default) or `parquet`                          |
+| `--rotate`       | `rotate`     | Seconds per Parquet file (default 3600)                  |
 | `--log-level`    | `$LOG_LEVEL` | Logging level (default `INFO`)                           |
 
-Each line is the raw GeoJSON Feature plus a `requested_at` UTC timestamp and the `area` name.
 Stop with Ctrl-C / SIGTERM; all areas shut down together.
+
+### Output formats
+
+**`format = "ndjson"`** (default, uncompressed): each line is the raw GeoJSON Feature plus a
+`requested_at` UTC timestamp and the `area` name, appended as it arrives. Nothing is lost on a
+hard kill. Convert with `ais-poller parse`.
+
+**`format = "parquet"`** (compressed): every feature is parsed on arrival (same columns as
+[Parse](#parse), `base_date_time` as a UTC timestamp) and streamed into zstd Parquet, around
+50× smaller than the raw NDJSON. The layout is a Hive-partitioned dataset with one directory
+per area and day:
+
+```
+data/area=moerdijk/date=2026-09-26/part-20260926T010000Z.parquet
+data/area=moerdijk/date=2026-09-26/.part-20260926T020000Z.parquet.tmp   ← still being written
+```
+
+Each area thread writes its own files, and a new file starts every `rotate` seconds (aligned to
+UTC). A Parquet file is only readable once it is closed, so the open file is a hidden `.tmp` that
+is renamed on rotation and on Ctrl-C / SIGTERM. A hard kill (SIGKILL, power loss) loses the open
+window. Files carry GeoParquet metadata and a WKB `geometry` point column next to
+`latitude`/`longitude`.
+
+Read the whole dataset in parallel with any engine; `area` and `date` come from the paths:
+
+```sql
+-- DuckDB
+SELECT area, count(*), count(DISTINCT mmsi)
+FROM read_parquet('data/**/*.parquet', hive_partitioning = true) GROUP BY area;
+```
+
+```python
+pl.scan_parquet("data/**/*.parquet", hive_partitioning=True)  # Polars (lazy)
+pd.read_parquet("data")  # pandas (pyarrow)
+spark.read.parquet("data")  # Spark
+```
+
+QGIS (3.28+, GDAL ≥ 3.5) opens a single `part-*.parquet` directly as a point layer.
 
 ## Parse
 
@@ -68,10 +108,11 @@ Lines that are not valid JSON or cannot be parsed are skipped and counted in a w
 
 ```sh
 ais-poller inspect data/*.ndjson          # per-file summary
+ais-poller inspect data/area=moerdijk     # a Parquet dataset directory (or single .parquet)
 ais-poller inspect --json data/*.ndjson   # machine-readable
 ```
 
-Streams each file and reports record/tick counts, time span, median tick interval, records per
+Streams each file or dataset and reports record/tick counts, time span, median tick interval, records per
 tick, distinct vessels, lat/lon extent, records per area, bad lines, out-of-order ticks and every
 gap longer than 3× the median interval.
 

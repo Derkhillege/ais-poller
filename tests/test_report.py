@@ -19,9 +19,11 @@
 """Tests for the inspect report."""
 
 import json
+from datetime import datetime
 
 from ais_poller.cli import main
 from ais_poller.report import inspect_file
+from ais_poller.sink import ParquetSink
 
 
 def _line(ts, area="north", track="1", lat=51.7, lon=4.3):
@@ -63,16 +65,35 @@ def test_inspect_detects_gap_and_areas(tmp_path):
     assert r.extent["minLat"] == 51.0 and r.extent["maxLat"] == 52.0
 
 
-def test_inspect_fails_on_bad_line(tmp_path):
+def test_inspect_counts_bad_lines(tmp_path):
+    """A corrupt line is counted, not fatal: a long run must stay inspectable."""
     path = tmp_path / "corrupt.ndjson"
     path.write_text("garbage\n")
-    import pytest
 
-    with pytest.raises(json.JSONDecodeError):
-        inspect_file(path)
+    report = inspect_file(path)
+
+    assert (report.records, report.bad_lines) == (0, 1)
 
 
 def test_inspect_cli_json(capsys, sample_ndjson):
     assert main(["inspect", "--json", str(sample_ndjson)]) == 0
     (report,) = json.loads(capsys.readouterr().out)
     assert report["records"] == 727
+
+
+def test_inspect_parquet_dataset_matches_ndjson(tmp_path, capsys, sample_ndjson):
+    with ParquetSink(tmp_path / "area=north", 3600) as sink, sample_ndjson.open() as f:
+        for line in f:
+            feat = json.loads(line)
+            sink.write([feat], datetime.fromisoformat(feat["requested_at"]))
+
+    r = inspect_file(tmp_path)
+    expected = inspect_file(sample_ndjson)
+    assert (r.records, r.ticks, r.first, r.last) == (727, 3, expected.first, expected.last)
+    assert r.records_per_tick == expected.records_per_tick
+    assert r.extent == expected.extent
+    assert r.areas == {"north": 727}
+
+    (path,) = tmp_path.rglob("*.parquet")
+    assert main(["inspect", "--json", str(tmp_path), str(path)]) == 0
+    assert [rep["records"] for rep in json.loads(capsys.readouterr().out)] == [727, 727]

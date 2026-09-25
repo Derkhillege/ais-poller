@@ -19,9 +19,11 @@
 import json
 import statistics
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 # A gap between ticks counts as abnormal when it exceeds this multiple of the median interval.
 GAP_FACTOR = 3.0
@@ -51,8 +53,52 @@ class FileReport:
     out_of_order: int = 0
 
 
+Row = tuple[str, str | None, Any, Any, Any]  # (timestamp, area, vessel, lat, lon)
+
+
+def _ndjson_rows(path: Path, report: FileReport) -> Iterator[Row]:
+    with path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                feat = json.loads(line)
+                ts = feat["requested_at"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                report.bad_lines += 1
+                continue
+            props = feat.get("properties") or {}
+            vessel = props.get("TrackID") or props.get("MMSI") or feat.get("id")
+            yield ts, feat.get("area"), vessel, props.get("Lat"), props.get("Lon")
+
+
+def _parquet_rows(path: Path) -> Iterator[Row]:
+    """Rows of a Parquet file, or of every *.parquet under a dataset directory, in path order.
+
+    The area comes from an area=<name> directory in the path; hidden in-progress .tmp files
+    are skipped.
+    """
+    import pyarrow.parquet as pq
+
+    files = sorted(path.rglob("*.parquet")) if path.is_dir() else [path]
+    columns = ["base_date_time", "mmsi", "latitude", "longitude"]
+    for file in files:
+        area = next((p[5:] for p in file.parts if p.startswith("area=")), None)
+        for batch in pq.ParquetFile(file).iter_batches(columns=columns):
+            for ts, mmsi, lat, lon in zip(
+                *(batch.column(c).to_pylist() for c in columns), strict=True
+            ):
+                yield ts.isoformat(), area, mmsi, lat, lon
+
+
+def _rows(path: Path, report: FileReport) -> Iterator[Row]:
+    if path.is_dir() or path.suffix == ".parquet":
+        return _parquet_rows(path)
+    return _ndjson_rows(path, report)
+
+
 def inspect_file(path: Path) -> FileReport:
-    """Summarise a poller NDJSON file in one streaming pass.
+    """Summarise a poller NDJSON file, Parquet file or Parquet dataset in one streaming pass.
 
     Memory grows only with the number of ticks and distinct vessels, not with the record count.
     """
@@ -64,31 +110,23 @@ def inspect_file(path: Path) -> FileReport:
     lat_min = lon_min = float("inf")
     lat_max = lon_max = float("-inf")
 
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            feat = json.loads(line)
-            ts = feat["requested_at"]
-            report.records += 1
-            # Records of one tick share requested_at and are written contiguously.
-            if tick_times and ts == tick_times[-1]:
-                tick_sizes[-1] += 1
-            else:
-                if tick_times and ts < tick_times[-1]:
-                    report.out_of_order += 1
-                tick_times.append(ts)
-                tick_sizes.append(1)
-            if "area" in feat:
-                areas[feat["area"]] += 1
-            props = feat.get("properties") or {}
-            vessel = props.get("TrackID") or props.get("MMSI") or feat.get("id")
-            if vessel is not None:
-                vessels.add(str(vessel))
-            lat, lon = props.get("Lat"), props.get("Lon")
-            if isinstance(lat, int | float) and isinstance(lon, int | float):
-                lat_min, lat_max = min(lat_min, lat), max(lat_max, lat)
-                lon_min, lon_max = min(lon_min, lon), max(lon_max, lon)
+    for ts, area, vessel, lat, lon in _rows(path, report):
+        report.records += 1
+        # Records of one tick share their timestamp and are written contiguously.
+        if tick_times and ts == tick_times[-1]:
+            tick_sizes[-1] += 1
+        else:
+            if tick_times and ts < tick_times[-1]:
+                report.out_of_order += 1
+            tick_times.append(ts)
+            tick_sizes.append(1)
+        if area is not None:
+            areas[area] += 1
+        if vessel is not None:
+            vessels.add(str(vessel))
+        if isinstance(lat, int | float) and isinstance(lon, int | float):
+            lat_min, lat_max = min(lat_min, lat), max(lat_max, lat)
+            lon_min, lon_max = min(lon_min, lon), max(lon_max, lon)
 
     report.ticks = len(tick_times)
     report.areas = dict(areas)
