@@ -1,0 +1,26 @@
+# Example multi-area configuration: `ais-poller poll --config ais-poller.toml`
+# Each [[areas]] entry is polled on its own WebSocket, in parallel, and written to
+# <output_dir>/<name>.ndjson (or to its own `output` path).
+
+url = "wss://example.com/ws"
+interval = 10          # seconds between requests, per area (StreamFeatures: between summary log lines)
+output_dir = "data"
+
+# Request template. params.filters.boundingBox is filled in per area, and each area keeps its
+# own copy of "id", incremented after every request. With method = "StreamFeatures" it is sent
+# once per connection and every message the server pushes is written; other methods are sent
+# every `interval` seconds, one response per request.
+[request]
+jsonrpc = "2.0"
+method = "StreamFeatures"
+id = 1
+params.filters.filterQuery = "()"
+
+[[areas]]
+name = "moerdijk"
+bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # [minLat, minLon, maxLat, maxLon]
+
+# [[areas]]
+# name = "rotterdam"
+# bbox = [51.85, 4.25, 51.95, 4.55]
+# output = "data/rotterdam-port.ndjson"   # optional, overrides output_dir/<name>.ndjson
