@@ -122,12 +122,36 @@ def test_toml_overrides(tmp_path):
         ('name = "south"', 'name = "north"'),
         ('name = "south"', 'name = "../south"'),
         ('output = "elsewhere/south.json"', 'output = "out/north.ndjson"'),
+        ("interval = 10", 'interval = 10\nformat = "csv"'),
+        ("interval = 10", "interval = 10\nrotate = 0"),
     ],
 )
 def test_toml_invalid(tmp_path, old, new):
     assert old in TOML
     with pytest.raises(SystemExit):
         load_config(_write(tmp_path, TOML.replace(old, new, 1)))
+
+
+def test_format_defaults_to_ndjson(tmp_path):
+    config = load_config(_write(tmp_path, TOML))
+    assert (config.format, config.rotate) == ("ndjson", 3600)
+
+
+def test_parquet_format_writes_hive_area_directories(tmp_path):
+    text = TOML.replace("interval = 10", 'interval = 10\nformat = "parquet"\nrotate = 600')
+    config = load_config(_write(tmp_path, text))
+    assert (config.format, config.rotate) == ("parquet", 600)
+    north, south = config.areas
+    assert north.output_path == Path("out/area=north")
+    assert south.output_path == Path("elsewhere/south.json")
+
+
+def test_format_and_rotate_overrides(tmp_path):
+    config = load_config(_write(tmp_path, TOML), fmt="parquet", rotate=60)
+    assert (config.format, config.rotate) == ("parquet", 60)
+    assert config.areas[0].output_path == Path("out/area=north")
+    with pytest.raises(SystemExit, match="rotate"):
+        load_config(_write(tmp_path, TOML), rotate=-1)
 
 
 def test_toml_interval_override_must_be_positive(tmp_path):

@@ -22,7 +22,6 @@ import signal
 import threading
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from types import FrameType
 from typing import Any
 
@@ -30,6 +29,7 @@ from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
 
 from ais_poller.config import Area, Config
+from ais_poller.sink import Sink, open_sink
 
 log = logging.getLogger("ais_poller")
 
@@ -73,47 +73,35 @@ def _pushed_features(message: Any) -> list[Any] | None:
     return [json.loads(p) if isinstance(p, str) else p for p in params]
 
 
-def _append_features(features: list[Any], output_path: Path, area: str | None) -> None:
-    """Stamp features with the receive time (and area) and append them as NDJSON."""
-    received_at = datetime.now(UTC).isoformat()
-    with output_path.open("a", encoding="utf-8") as f:
-        for record in features:
-            record["requested_at"] = received_at
-            if area is not None:
-                record["area"] = area
-            json.dump(record, f)
-            f.write("\n")
-
-
-def poll_once(
-    websocket: ClientConnection,
-    request_params: dict[str, Any],
-    output_path: Path,
-    area: str | None = None,
-) -> int:
-    """Send one request, receive the response, and append features to the output file."""
+def poll_once(websocket: ClientConnection, request_params: dict[str, Any], sink: Sink) -> int:
+    """Send one request, receive the response, and write its features to sink."""
     websocket.send(json.dumps(request_params))
     message = json.loads(websocket.recv())
     _check_jsonrpc_error(message)
     features = _features(message) or []
-    _append_features(features, output_path, area)
-    return len(features)
+    return sink.write(features, datetime.now(UTC))
 
 
 def poll_area(config: Config, area: Area, stop: threading.Event = _stop_event) -> None:
     """Poll one area on its own socket until stop is set, reconnecting on errors."""
     # This area's own request; its "id" is incremented in place across ticks and reconnects.
     request_params = config.request_for(area)
-    area.output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("[%s] polling every %ds → %s", area.name, config.interval, area.output_path)
+    with open_sink(config, area) as sink:
+        _poll_loop(config, area, request_params, sink, stop)
+    log.info("[%s] stopped", area.name)
 
+
+def _poll_loop(
+    config: Config, area: Area, request_params: dict[str, Any], sink: Sink, stop: threading.Event
+) -> None:
     backoff = 1
     while not stop.is_set():
         try:
             with connect(config.wss_url) as websocket:
                 backoff = 1
                 while not stop.is_set():
-                    n = poll_once(websocket, request_params, area.output_path, area.name)
+                    n = poll_once(websocket, request_params, sink)
                     log.info("[%s] wrote %d records (id=%s)", area.name, n, request_params["id"])
                     request_params["id"] += 1
                     stop.wait(config.interval)
@@ -124,10 +112,10 @@ def poll_area(config: Config, area: Area, stop: threading.Event = _stop_event) -
             stop.wait(backoff)
             backoff = min(backoff * 2, 60)
 
-    log.info("[%s] stopped", area.name)
 
-
-def _drain(websocket: ClientConnection, config: Config, area: Area, stop: threading.Event) -> None:
+def _drain(
+    websocket: ClientConnection, config: Config, area: Area, sink: Sink, stop: threading.Event
+) -> None:
     """Read every pushed message until stop is set, logging a summary every interval seconds.
 
     The socket must never sit unread: once websockets' receive queue fills it stops reading
@@ -149,8 +137,7 @@ def _drain(websocket: ClientConnection, config: Config, area: Area, stop: thread
             if features is None:
                 features = _pushed_features(message)
             if features is not None:
-                _append_features(features, area.output_path, area.name)
-                records += len(features)
+                records += sink.write(features, datetime.now(UTC))
             else:
                 # Unexpected message type; show the first few of each connection.
                 unknown += 1
@@ -173,9 +160,15 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
     """Subscribe once per connection and write every pushed feature until stop is set."""
     # As in poll_area, "id" is incremented in place: once per subscription, across reconnects.
     request_params = config.request_for(area)
-    area.output_path.parent.mkdir(parents=True, exist_ok=True)
     log.info("[%s] streaming → %s", area.name, area.output_path)
+    with open_sink(config, area) as sink:
+        _stream_loop(config, area, request_params, sink, stop)
+    log.info("[%s] stopped", area.name)
 
+
+def _stream_loop(
+    config: Config, area: Area, request_params: dict[str, Any], sink: Sink, stop: threading.Event
+) -> None:
     backoff = 1
     while not stop.is_set():
         try:
@@ -184,7 +177,7 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
                 log.info("[%s] subscribed (id=%s)", area.name, request_params["id"])
                 request_params["id"] += 1
                 backoff = 1
-                _drain(websocket, config, area, stop)
+                _drain(websocket, config, area, sink, stop)
         except (WebSocketException, OSError) as e:
             if stop.is_set():
                 break
@@ -192,15 +185,13 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
             stop.wait(backoff)
             backoff = min(backoff * 2, 60)
 
-    log.info("[%s] stopped", area.name)
-
 
 def run(config: Config) -> None:
     """Register signal handlers and poll every area in parallel until SIGINT/SIGTERM or duration."""
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     mode = "streaming" if config.streaming else "polling"
-    log.info("%s %s for %d area(s)", mode, config.wss_url, len(config.areas))
+    log.info("%s %s for %d area(s) → %s", mode, config.wss_url, len(config.areas), config.format)
 
     target = stream_area if config.streaming else poll_area
     threads = [
