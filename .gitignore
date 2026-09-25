@@ -9,8 +9,18 @@ wheels/
 # Virtual environments
 .venv
 
+# Secrets / local config
 .env
+.env.*
+!.env.example
+.claude/settings.local.json
 
-# Output
+# Poller output and local test runs
+data/
 data.json
+data.raw.json
 *.ndjson
+!tests/fixtures/*.ndjson
+*.parquet
+*.geoparquet
+local-runs/

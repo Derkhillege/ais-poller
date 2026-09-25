@@ -1,4 +1,6 @@
-from ais_poller import main
+import sys
+
+from ais_poller.cli import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

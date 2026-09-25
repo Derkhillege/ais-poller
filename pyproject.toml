@@ -1,16 +1,24 @@
 [project]
 name = "ais-poller"
 version = "0.1.0"
-description = "Polls the EuRIS WebSocket for AIS vessel features and appends them as NDJSON."
+description = "Polls the EuRIS WebSocket for AIS vessel features to NDJSON and parses them into flat vessel records."
 readme = "README.md"
 requires-python = ">=3.13"
+authors = [{ name = "Derk Hillege", email = "derkhillege@protonmail.com" }]
+keywords = ["ais", "euris", "vessel", "websocket", "ndjson"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: GIS",
+]
 dependencies = [
     "python-dotenv>=1.2.2",
     "websockets>=16.0",
 ]
 
 [project.scripts]
-ais-poller = "ais_poller:main"
+ais-poller = "ais_poller.cli:main"
 
 [dependency-groups]
 dev = [
@@ -27,6 +35,8 @@ packages = ["src/ais_poller"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: runs against the full data.json test set (select with -m slow)"]
 
 [tool.ruff]
 line-length = 100
