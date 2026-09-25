@@ -19,7 +19,7 @@ Managed with `uv` (Python 3.13 pinned via `.python-version`). Build backend is `
 Single-area mode (no `--config`) reads env vars from `.env` (loaded via `python-dotenv`). Required:
 - `EURIS_WSS` — WebSocket URL.
 - `REQUEST_PARAMS` — JSON object sent on each tick. Must contain a numeric `id` field; it is incremented in-place each iteration as part of the EuRIS protocol.
-- `INTERVAL` — seconds between requests (int).
+- `INTERVAL` — seconds between requests (int); with `StreamFeatures`, seconds between summary log lines.
 
 Optional:
 - `OUTPUT_PATH` — NDJSON output path (default `data.json`). Parent dirs are auto-created.
@@ -33,12 +33,13 @@ The devcontainer has no network access to EuRIS; `poll` can only be exercised li
 
 - `cli.py` — argparse entry point `main(argv) -> int`; subcommands `poll` (default) and `parse`. CLI flags override env vars.
 - `config.py` — `load_config()` → `Config` (url, interval, request template, tuple of `Area`s). TOML mode (`config_file=`) or env mode (one `default` area, `REQUEST_PARAMS` sent unchanged). Fail-fast SystemExit on missing/bad values. `Config.request_for(area)` deep-copies the template and fills `params.filters.boundingBox`.
-- `poller.py` — `poll_once` (single send/recv/append cycle, tags `area`), `poll_area` (reconnect loop for one area) and `run(config)` (one thread per area, joins until shutdown).
+- `poller.py` — `poll_once` (single send/recv/append cycle, tags `area`), `poll_area` (request/response reconnect loop for one area), `stream_area` (subscribe once per connection, then `_drain` every pushed message) and `run(config)` (one thread per area, joins until shutdown). `Config.streaming` (request `method == "StreamFeatures"`) picks `stream_area`.
+- Streaming must keep reading the socket: websockets stops reading the network once its 16-frame receive queue is full, so unread pushes starve pongs and the keepalive ping times out (the ~51 s reconnect cycle in `local-runs/2026-09-26`). The push format beyond `result.features` is still unknown; non-feature messages are logged (first 5 per connection at INFO).
 - `report.py` — `inspect_file` (single streaming pass: ticks, gaps > 3× median interval, areas, extent, vessels) behind `ais-poller inspect`.
 - `parse.py` — `parse_euris_feature` (feature → flat record), `iter_records` (streaming NDJSON reader), `parse_file`. Both poll and parse must stay streaming (no loading whole files) so long runs don't grow memory.
 - `__init__.py` only exposes `__version__`; `__main__.py` is a shim.
 - Outer loop reconnects on `WebSocketException`/`OSError` with exponential backoff capped at 60s; inner loop reuses a single socket across ticks.
-- Each area's request dict (from `request_for`) has its `id` mutated in place across ticks and reconnects — preserve this when refactoring; resetting it would break server-side request tracking. Areas never share a request dict or output file.
+- Each area's request dict (from `request_for`) has its `id` mutated in place across ticks and reconnects (streaming: once per subscription) — preserve this when refactoring; resetting it would break server-side request tracking. Areas never share a request dict or output file.
 - Response shape is assumed to be `{"result": {"features": [...]}}`. Malformed JSON is logged and skipped; missing `result.features` yields zero records (no crash).
 - Graceful shutdown: SIGINT/SIGTERM set the module-level `_stop_event` (`threading.Event`). Area threads sleep via `stop.wait(...)` so they wake immediately, finish the in-progress tick and close their socket via the context manager; the main thread joins with a timeout to stay responsive to signals.
 

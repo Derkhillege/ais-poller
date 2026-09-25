@@ -110,3 +110,90 @@ def test_areas_poll_independently(tmp_path, monkeypatch):
         assert len(lines) == 3
         assert {r["area"] for r in lines} == {area.name}
     assert config.request_template["id"] == 1
+
+
+class StreamingWebSocket:
+    """Fake socket that pushes scripted messages; None simulates a recv timeout.
+
+    When the script runs out it raises end (a connection error), or sets stop if end is None.
+    """
+
+    def __init__(self, stop: threading.Event, script: list, end: Exception | None = None):
+        self.stop, self.script, self.end = stop, list(script), end
+        self.sent: list[str] = []
+
+    def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    def recv(self, timeout: float | None = None) -> str:
+        if not self.script:
+            if self.end is not None:
+                raise self.end
+            self.stop.set()
+            raise TimeoutError
+        message = self.script.pop(0)
+        if message is None:
+            raise TimeoutError
+        return message
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _features_msg(*ids: str) -> str:
+    return json.dumps({"result": {"features": [{"id": i} for i in ids]}})
+
+
+def test_stream_reads_every_pushed_message(tmp_path, monkeypatch, caplog):
+    """One subscribe per connection; every pushed message is read, whatever arrives between."""
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 10, {"id": 1, "method": "StreamFeatures"}, (area,))
+    stop = threading.Event()
+    script = [
+        _features_msg("a", "b"),
+        None,
+        '{"jsonrpc": "2.0", "method": "Heartbeat"}',
+        "not json",
+        _features_msg("c"),
+    ]
+    ws = StreamingWebSocket(stop, script)
+    monkeypatch.setattr(poller, "connect", lambda _url: ws)
+
+    with caplog.at_level("INFO", logger="ais_poller"):
+        poller.stream_area(config, area, stop)
+
+    assert [json.loads(m)["id"] for m in ws.sent] == [1]
+    lines = [json.loads(line) for line in area.output_path.read_text().splitlines()]
+    assert [r["id"] for r in lines] == ["a", "b", "c"]
+    assert {r["area"] for r in lines} == {"north"}
+    assert "Heartbeat" in caplog.text
+    assert "malformed message" in caplog.text
+
+
+def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch):
+    area = Area("north", None, tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 10, {"id": 5, "method": "StreamFeatures"}, (area,))
+    stop = threading.Event()
+    sockets = [
+        StreamingWebSocket(stop, [_features_msg("a")], end=OSError("reset")),
+        StreamingWebSocket(stop, [_features_msg("b")]),
+    ]
+    monkeypatch.setattr(poller, "connect", lambda _url: sockets.pop(0) if sockets else None)
+    first, second = sockets
+    # Skip the reconnect backoff without setting stop.
+    monkeypatch.setattr(stop, "wait", lambda _t=None: False)
+
+    poller.stream_area(config, area, stop)
+
+    assert [json.loads(m)["id"] for m in first.sent + second.sent] == [5, 6]
+    ids = [json.loads(line)["id"] for line in area.output_path.read_text().splitlines()]
+    assert ids == ["a", "b"]
+
+
+def test_streaming_follows_request_method():
+    areas = (Area("x", None, Path("x.ndjson")),)
+    assert Config("wss://e", 10, {"id": 1, "method": "StreamFeatures"}, areas).streaming
+    assert not Config("wss://e", 10, {"id": 1, "method": "GetFeatures"}, areas).streaming

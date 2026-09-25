@@ -29,6 +29,11 @@ class Config:
     request_template: dict[str, Any]
     areas: tuple[Area, ...]
 
+    @property
+    def streaming(self) -> bool:
+        """StreamFeatures subscribes once per connection and the server pushes messages."""
+        return self.request_template.get("method") == "StreamFeatures"
+
     def request_for(self, area: Area) -> dict[str, Any]:
         """Return a fresh request dict for area with its bounding box filled in.
 

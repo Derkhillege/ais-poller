@@ -30,7 +30,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     poll.add_argument("--url", help="WebSocket URL (overrides url / $EURIS_WSS)")
     poll.add_argument(
-        "--interval", type=int, help="seconds between requests (overrides interval / $INTERVAL)"
+        "--interval",
+        type=int,
+        help="seconds between requests, or between summary logs when streaming "
+        "(overrides interval / $INTERVAL)",
     )
     poll.add_argument(
         "-o",
