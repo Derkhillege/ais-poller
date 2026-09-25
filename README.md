@@ -17,37 +17,26 @@ uv run ais-poller --help
 
 ## Poll
 
-### Multiple areas in parallel (TOML config)
-
 ```sh
 cp ais-poller.example.toml ais-poller.toml   # edit url, interval, request and areas
-ais-poller poll --config ais-poller.toml
+ais-poller poll                              # reads ./ais-poller.toml; `poll` is the default command
+ais-poller poll --config other.toml --interval 30 -o out/
 ```
 
 The config holds a shared request template and a list of `[[areas]]`, each with a `name` and a
 `bbox = [minLat, minLon, maxLat, maxLon]`. Every area is polled on its own WebSocket in its own
 thread, with its own copy of the request (bounding box filled into
 `params.filters.boundingBox`, own `id` counter) and its own output file,
-`<output_dir>/<name>.ndjson` unless the area sets `output`. Records are tagged with `area`.
-`--url`, `--interval` and `-o` (the output directory) override the file.
+`<output_path>/<name>.ndjson` unless the area sets `output`. Records are tagged with `area`.
+For a single area, list just one `[[areas]]` entry.
 
-### Single area (env vars)
-
-```sh
-ais-poller poll            # `poll` is the default command, so plain `ais-poller` works too
-ais-poller poll --interval 30 -o out/ais.ndjson --env-file prod.env
-```
-
-Without `--config`, configuration comes from env vars (or a `.env` file, see `.env.example`) and
-`REQUEST_PARAMS` is sent as is. CLI flags override them.
-
-| Env var          | Flag           | Required | Description                                                  |
-|------------------|----------------|----------|--------------------------------------------------------------|
-| `EURIS_WSS`      | `--url`        | yes      | WebSocket URL                                                |
-| `REQUEST_PARAMS` | –              | yes      | JSON-RPC request object; its numeric `id` increments each tick |
-| `INTERVAL`       | `--interval`   | yes      | Seconds between requests                                     |
-| `OUTPUT_PATH`    | `-o/--output`  | no       | NDJSON output path (default `data.json`)                     |
-| `LOG_LEVEL`      | `--log-level`  | no       | Logging level (default `INFO`)                               |
+| Flag             | Overrides    | Description                                              |
+|------------------|--------------|----------------------------------------------------------|
+| `-c/--config`    | –            | TOML config file (default `ais-poller.toml`)             |
+| `--url`          | `url`        | WebSocket URL                                            |
+| `--interval`     | `interval`   | Seconds between requests (streaming: between summary logs) |
+| `-o/--output`    | `output_path` | Output directory                                         |
+| `--log-level`    | `$LOG_LEVEL` | Logging level (default `INFO`)                           |
 
 Each line is the raw GeoJSON Feature plus a `requested_at` UTC timestamp and the `area` name.
 Stop with Ctrl-C / SIGTERM; all areas shut down together.
@@ -91,7 +80,7 @@ gap longer than 3× the median interval.
 The devcontainer cannot reach the EuRIS site, so live runs happen on a local machine:
 
 ```sh
-ais-poller poll --config ais-poller.toml 2> poll.log     # let it run, then Ctrl-C
+ais-poller poll 2> poll.log     # let it run, then Ctrl-C
 ais-poller inspect data/*.ndjson > inspect.txt
 ```
 

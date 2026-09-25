@@ -12,8 +12,7 @@ Key invariants, updated 2026-09-26 after the CLI / multi-area restructure (see C
 - Shutdown: SIGINT/SIGTERM set the module-level `threading.Event` `_stop_event`. All waits use `stop.wait(...)`, never `time.sleep`, so threads wake immediately. `run()` joins area threads with a timeout so the main thread stays responsive to signals.
 - Records are appended one line at a time (NDJSON) with `requested_at = datetime.now(UTC).isoformat()` at receive time, plus `area`. Each area writes its own file; config validation rejects two areas sharing an output path.
 - Poll, parse and inspect must all stream — flag anything that loads a whole NDJSON file into memory.
-- Config fails fast with `SystemExit` (env mode: `EURIS_WSS`, `REQUEST_PARAMS` with integer `id`, `INTERVAL`; TOML mode: url, positive interval, `[request]` with integer id, ≥1 area with safe unique name and valid bbox).
-- Tests of `load_config` must patch `ais_poller.config.load_dotenv` to a no-op, otherwise a real `.env` overrides monkeypatched vars.
+- Config is TOML only (`ais-poller.toml` by default; env-var/`.env` mode was removed 2026-09-26). It fails fast with `SystemExit`: url, positive interval (also when overridden by `--interval`), `[request]` with integer id, ≥1 area with safe unique name and valid bbox.
 - The devcontainer cannot reach EuRIS; live behaviour is only verified by the user locally (results in gitignored `local-runs/`).
 
 **Why:** These invariants are load-bearing for EuRIS protocol compatibility and data integrity.
