@@ -12,7 +12,6 @@ wheels/
 # Secrets / local config
 .env
 .env.*
-!.env.example
 ais-poller.toml
 .claude/settings.local.json
 

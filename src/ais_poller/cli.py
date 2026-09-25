@@ -43,14 +43,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     poll = sub.add_parser("poll", help="poll the WebSocket and append features as NDJSON (default)")
-    source = poll.add_mutually_exclusive_group()
-    source.add_argument(
-        "-c", "--config", type=Path, help="TOML config with one or more areas, polled in parallel"
+    poll.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        default=Path("ais-poller.toml"),
+        help="TOML config listing the areas to poll in parallel (default: ais-poller.toml)",
     )
-    source.add_argument(
-        "--env-file", type=Path, help="load env vars from this file instead of .env"
-    )
-    poll.add_argument("--url", help="WebSocket URL (overrides url / $EURIS_WSS)")
+    poll.add_argument("--url", help="WebSocket URL (overrides url)")
     poll.add_argument(
         "--interval",
         type=int,
@@ -68,8 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         type=Path,
-        help="with --config: output directory (overrides output_dir); "
-        "otherwise: NDJSON output file (overrides $OUTPUT_PATH)",
+        help="output directory for the area files (overrides output_path)",
     )
 
     parse = sub.add_parser("parse", help="convert poller NDJSON into flat vessel records")
@@ -99,8 +98,7 @@ def _poll(args: argparse.Namespace) -> int:
     from ais_poller.poller import run
 
     config = load_config(
-        getattr(args, "env_file", None),
-        config_file=getattr(args, "config", None),
+        getattr(args, "config", Path("ais-poller.toml")),
         wss_url=getattr(args, "url", None),
         interval=getattr(args, "interval", None),
         output_path=getattr(args, "output", None),
@@ -110,15 +108,30 @@ def _poll(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Exit code for a missing input file, as argparse uses for a usage error.
+MISSING_FILE = 2
+
+
+def _no_such_file(path: object) -> int:
+    """Report a missing input file the way a CLI should: a message, not a traceback."""
+    print(f"no such file: {path}", file=sys.stderr)
+    return MISSING_FILE
+
+
 def _parse(args: argparse.Namespace) -> int:
     from ais_poller.parse import parse_file
 
-    if args.output is None:
-        n = parse_file(args.input, sys.stdout, args.format)
-    else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", newline="", encoding="utf-8") as out:
-            n = parse_file(args.input, out, args.format)
+    if not args.input.is_file():  # checked up front, so no partial output is written
+        return _no_such_file(args.input)
+    try:
+        if args.output is None:
+            n = parse_file(args.input, sys.stdout, args.format)
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", newline="", encoding="utf-8") as out:
+                n = parse_file(args.input, out, args.format)
+    except FileNotFoundError as e:  # lost between the check and the read
+        return _no_such_file(e.filename or args.input)
     logging.getLogger("ais_poller").info("parsed %d records", n)
     return 0
 
@@ -126,7 +139,10 @@ def _parse(args: argparse.Namespace) -> int:
 def _inspect(args: argparse.Namespace) -> int:
     from ais_poller.report import format_report, inspect_file, to_json
 
-    reports = [inspect_file(p) for p in args.files]
+    try:
+        reports = [inspect_file(p) for p in args.files]
+    except FileNotFoundError as e:
+        return _no_such_file(e.filename or args.files[0])
     print(to_json(reports) if args.json else "\n\n".join(format_report(r) for r in reports))
     return 0
 

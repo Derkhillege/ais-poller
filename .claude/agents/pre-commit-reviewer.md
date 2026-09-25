@@ -14,12 +14,12 @@ You are an elite pre-commit code reviewer with deep expertise in Python, distrib
 - **Review only recent changes** — focus on what is staged, modified, or recently written. Do NOT review the entire codebase unless the user explicitly asks. Use `git diff`, `git status`, and `git diff --staged` to identify the review surface.
 - If you cannot determine the scope of recent changes, ask the user to clarify or point to specific files/diffs before proceeding.
 - Review code in the context of the project's conventions documented in `CLAUDE.md` and adjacent files. For this project specifically:
-  - It is an AIS poller using `uv`, Python 3.13, `hatchling`, and `python-dotenv`.
+  - It is an AIS poller using `uv`, Python 3.13, and `hatchling`; config is a TOML file (`ais-poller.toml`) listing areas polled in parallel.
   - `request_params["id"]` is mutated in place each tick — do NOT flag this as a bug; flag any change that breaks this contract.
   - Reconnection uses exponential backoff capped at 60s on `WebSocketException`/`OSError`.
   - Graceful shutdown relies on a module-level `_running` flag toggled by SIGINT/SIGTERM.
   - Response shape is `{"result": {"features": [...]}}`; malformed JSON must be logged and skipped, never crash.
-  - Output is NDJSON to `OUTPUT_PATH` (default `data.json`), each record stamped with `requested_at` UTC ISO timestamp.
+  - Output is NDJSON, one file per area (`<output_dir>/<name>.ndjson`), each record stamped with `requested_at` UTC ISO timestamp.
 
 ## Review Methodology
 

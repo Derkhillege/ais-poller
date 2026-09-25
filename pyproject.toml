@@ -34,7 +34,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "python-dotenv>=1.2.2",
     "websockets>=16.0",
 ]
 

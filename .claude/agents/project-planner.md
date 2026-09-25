@@ -95,7 +95,7 @@ Examples of what to record:
 - Recurring project patterns (e.g., "new features typically require updating `_load_config`, the poll loop, and the README")
 - Codebase invariants that must be preserved across changes (e.g., the in-place mutation of `request_params['id']`)
 - Conventions for testing, dependency management (uv), and entry points
-- Tech stack decisions and rationale (Python 3.13, hatchling, python-dotenv)
+- Tech stack decisions and rationale (Python 3.13, hatchling, TOML config)
 - Common risk areas and how they were mitigated previously
 - Estimation calibration data (tasks that turned out larger/smaller than planned)
 - File and module locations relevant to typical changes

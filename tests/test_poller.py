@@ -88,6 +88,19 @@ class ScriptedWebSocket(FakeWebSocket):
         return False
 
 
+def test_poll_area_without_a_request_id(tmp_path, monkeypatch):
+    """A [request] table with no id must not crash the tick loop."""
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 0, {"jsonrpc": "2.0", "params": {"filters": {}}}, (area,))
+    stop = threading.Event()
+    socket = ScriptedWebSocket(stop, ticks=2)
+    monkeypatch.setattr(poller, "connect", lambda _url: socket)
+
+    poll_area(config, area, stop)
+
+    assert [json.loads(m)["id"] for m in socket.sent] == [0, 1]
+
+
 def test_areas_poll_independently(tmp_path, monkeypatch):
     """Each area uses its own socket, bbox, id counter and output file."""
     areas = (
@@ -219,7 +232,7 @@ def _push_msg(*ids: str) -> str:
 
 def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
     """After the snapshot, featureStream notifications are written as records, not ignored."""
-    area = Area("north", None, tmp_path / "north.ndjson")
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
     config = Config("wss://example/ws", 10, {"id": 1, "method": "StreamFeatures"}, (area,))
     stop = threading.Event()
     ws = StreamingWebSocket(stop, [_features_msg("a"), _push_msg("181"), _push_msg("26", "39")])
@@ -236,7 +249,7 @@ def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
 
 
 def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch):
-    area = Area("north", None, tmp_path / "north.ndjson")
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
     config = Config("wss://example/ws", 10, {"id": 5, "method": "StreamFeatures"}, (area,))
     stop = threading.Event()
     sockets = [
@@ -256,7 +269,7 @@ def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch)
 
 
 def test_streaming_follows_request_method():
-    areas = (Area("x", None, Path("x.ndjson")),)
+    areas = (Area("x", (51.0, 4.0, 52.0, 5.0), Path("x.ndjson")),)
     assert Config("wss://e", 10, {"id": 1, "method": "StreamFeatures"}, areas).streaming
     assert not Config("wss://e", 10, {"id": 1, "method": "GetFeatures"}, areas).streaming
 

@@ -4,27 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A minimal AIS (Automatic Identification System) CLI. `ais-poller poll` connects to the EuRIS WebSocket endpoint, periodically sends a request payload, and appends each returned vessel feature as a JSON line to `data.json` (or `OUTPUT_PATH`). Each record is stamped with a `requested_at` UTC ISO timestamp at receive time. `ais-poller parse` streams such a file into flat vessel records (CSV or NDJSON).
+A minimal AIS (Automatic Identification System) CLI. `ais-poller poll` connects to the EuRIS WebSocket endpoint, periodically sends a request payload, and appends each returned vessel feature as a JSON line to one NDJSON file per configured area. Each record is stamped with a `requested_at` UTC ISO timestamp at receive time. `ais-poller parse` streams such a file into flat vessel records (CSV or NDJSON).
 
 ## Environment
 
 Managed with `uv` (Python 3.13 pinned via `.python-version`). Build backend is `hatchling`; package source lives under `src/ais_poller/`.
 
 - Install / sync deps: `uv sync`
-- Run the poller: `uv run ais-poller [poll]` (script entry `ais_poller.cli:main`) or `uv run python -m ais_poller`
-- Multi-area: `uv run ais-poller poll --config ais-poller.toml` (see `ais-poller.example.toml`; `[[areas]]` with `name` + `bbox = [minLat, minLon, maxLat, maxLon]`)
+- Run the poller: `uv run ais-poller [poll] [--config ais-poller.toml]` (script entry `ais_poller.cli:main`) or `uv run python -m ais_poller`
 - Parse results: `uv run ais-poller parse data.json -o out.csv [--format csv|ndjson]`
 - License headers: `python3 scripts/add_license_headers.py [--check] [files...]`; the `.githooks/pre-commit` hook runs it on staged files (enable with `git config core.hooksPath .githooks`). Every source file needs the GPL-3.0-or-later notice at the top (after any shebang); `tests/test_license.py` fails if one is missing or stale. The notice is generated from `pyproject.toml`, never hardcoded — change the name, description, author or `[tool.ais-poller] copyright-year` and re-run the script to rewrite every header.
 - Tests: `uv run pytest` (fast); `uv run pytest -m slow` runs against the full `data.json` test set (gitignored, 47,794 records; `data.raw.json` is the untrimmed original)
 
-Single-area mode (no `--config`) reads env vars from `.env` (loaded via `python-dotenv`). Required:
-- `EURIS_WSS` — WebSocket URL.
-- `REQUEST_PARAMS` — JSON object sent on each tick. Must contain a numeric `id` field; it is incremented in-place each iteration as part of the EuRIS protocol.
-- `INTERVAL` — seconds between requests (int); with `StreamFeatures`, seconds between summary log lines.
-
-Optional:
-- `OUTPUT_PATH` — NDJSON output path (default `data.json`). Parent dirs are auto-created.
-- `LOG_LEVEL` — stdlib logging level (default `INFO`).
+Configuration is a TOML file, `ais-poller.toml` by default (gitignored; start from `ais-poller.example.toml`): `url`, `interval` (seconds between requests; with `StreamFeatures`, between summary log lines), optional `output_path` (the output directory), a `[request]` template whose numeric `id` is optional, and one or more `[[areas]]` with `name` + `bbox = [minLat, minLon, maxLat, maxLon]` (optional `output`). Each area is polled on its own socket in parallel. `--url`, `--interval`, `-o` (output dir) override the file; `--log-level` / `$LOG_LEVEL` set logging (default `INFO`). There is no `.env` / env-var mode.
 
 ## Live testing
 
@@ -32,10 +24,8 @@ The devcontainer has no network access to EuRIS; `poll` can only be exercised li
 
 ## Architecture notes
 
-- `cli.py` — argparse entry point `main(argv) -> int`; subcommands `poll` (default), `parse`, `inspect` and `license`. CLI flags override env vars. On every command but `license` it calls `print_startup_notice()` first.
-- `metadata.py` — `project_metadata()` → `ProjectMetadata(name, summary, author, copyright_year)`, read from the nearest `pyproject.toml` whose `[project] name` matches this distribution (`[tool.ais-poller] copyright-year` for the year), else from the installed distribution metadata with the year parsed out of the file's own GPL header. Cached; `scripts/add_license_headers.py` imports it too, so the CLI notice and the file headers have one source.
-- `license.py` — GPL notices: `startup_notice()` (short notice, GPL "How to Apply" appendix), `print_startup_notice()` (prints it to stderr only when stdin and stderr are a tty, so pipes stay clean) and the `WARRANTY`/`CONDITIONS` text behind `ais-poller license --warranty/--conditions`.
-- `config.py` — `load_config()` → `Config` (url, interval, request template, tuple of `Area`s). TOML mode (`config_file=`) or env mode (one `default` area, `REQUEST_PARAMS` sent unchanged). Fail-fast SystemExit on missing/bad values. `Config.request_for(area)` deep-copies the template and fills `params.filters.boundingBox`.
+- `cli.py` — argparse entry point `main(argv) -> int`; subcommands `poll` (default), `parse` and `inspect`. CLI flags override config values.
+- `config.py` — `load_config(path)` → `Config` (url, interval, request template, tuple of `Area`s) from TOML. Fail-fast SystemExit on missing/bad values. `Config.request_for(area)` deep-copies the template and fills `params.filters.boundingBox`.
 - `poller.py` — `poll_once` (single send/recv/append cycle, tags `area`), `poll_area` (request/response reconnect loop for one area), `stream_area` (subscribe once per connection, then `_drain` every pushed message) and `run(config)` (one thread per area, joins until shutdown). `Config.streaming` (request `method == "StreamFeatures"`) picks `stream_area`.
 - Streaming must keep reading the socket: websockets stops reading the network once its 16-frame receive queue is full, so unread pushes starve pongs and the keepalive ping times out (the ~51 s reconnect cycle in `local-runs/2026-09-26`). The subscribe is answered with a `result.features` snapshot; updates then arrive as JSON-RPC notifications `{"method": "featureStream", "params": ["<feature JSON string>", ...]}` (~5/s for one area) and are written like snapshot features. Any other message is logged (first 5 per connection at INFO).
 - `report.py` — `inspect_file` (single streaming pass: ticks, gaps > 3× median interval, areas, extent, vessels) behind `ais-poller inspect`.
