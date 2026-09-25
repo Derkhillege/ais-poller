@@ -1,0 +1,1 @@
+- [Project invariants and architecture](project_invariants.md) — core contracts (id mutation, backoff, shutdown flag, NDJSON, UTC timestamps) verified at initial restructure

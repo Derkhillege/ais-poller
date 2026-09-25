@@ -1,0 +1,1 @@
+- [AIS-Poller project invariants](project_invariants.md) — Core invariants (id mutation, _running flag, NDJSON semantics, fail-fast config) + test gotcha for load_dotenv patching
