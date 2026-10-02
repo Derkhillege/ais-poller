@@ -36,6 +36,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "(overrides interval / $INTERVAL)",
     )
     poll.add_argument(
+        "-d",
+        "--duration",
+        type=float,
+        default=None,
+        help="duration in seconds to run before stopping (default: indefinite)",
+    )
+    poll.add_argument(
         "-o",
         "--output",
         type=Path,
@@ -66,6 +73,7 @@ def _poll(args: argparse.Namespace) -> int:
         wss_url=getattr(args, "url", None),
         interval=getattr(args, "interval", None),
         output_path=getattr(args, "output", None),
+        duration=getattr(args, "duration", None),
     )
     run(config)
     return 0
@@ -74,14 +82,11 @@ def _poll(args: argparse.Namespace) -> int:
 def _parse(args: argparse.Namespace) -> int:
     from ais_poller.parse import parse_file
 
-    if not args.input.is_file():
-        print(f"ais-poller parse: no such file: {args.input}", file=sys.stderr)
-        return 2
     if args.output is None:
         n = parse_file(args.input, sys.stdout, args.format)
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", newline="") as out:
+        with args.output.open("w", newline="", encoding="utf-8") as out:
             n = parse_file(args.input, out, args.format)
     logging.getLogger("ais_poller").info("parsed %d records", n)
     return 0
@@ -90,10 +95,6 @@ def _parse(args: argparse.Namespace) -> int:
 def _inspect(args: argparse.Namespace) -> int:
     from ais_poller.report import format_report, inspect_file, to_json
 
-    missing = [p for p in args.files if not p.is_file()]
-    if missing:
-        print(f"ais-poller inspect: no such file: {missing[0]}", file=sys.stderr)
-        return 2
     reports = [inspect_file(p) for p in args.files]
     print(to_json(reports) if args.json else "\n\n".join(format_report(r) for r in reports))
     return 0

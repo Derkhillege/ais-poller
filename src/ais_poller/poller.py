@@ -28,6 +28,12 @@ def _stop(signum: int, _frame: FrameType | None) -> None:
     log.info("shutdown requested (signal %s)", signum)
 
 
+def _check_jsonrpc_error(message: Any) -> None:
+    """Fail fast if the server responded with a JSON-RPC error."""
+    if isinstance(message, dict) and "error" in message:
+        raise RuntimeError(f"JSON-RPC error from server: {message['error']}")
+
+
 def _features(message: Any) -> list[Any] | None:
     """Return message["result"]["features"], or None if the message isn't a feature message."""
     result = message.get("result") if isinstance(message, dict) else None
@@ -52,7 +58,7 @@ def _pushed_features(message: Any) -> list[Any] | None:
 def _append_features(features: list[Any], output_path: Path, area: str | None) -> None:
     """Stamp features with the receive time (and area) and append them as NDJSON."""
     received_at = datetime.now(UTC).isoformat()
-    with output_path.open("a") as f:
+    with output_path.open("a", encoding="utf-8") as f:
         for record in features:
             record["requested_at"] = received_at
             if area is not None:
@@ -69,7 +75,9 @@ def poll_once(
 ) -> int:
     """Send one request, receive the response, and append features to the output file."""
     websocket.send(json.dumps(request_params))
-    features = _features(json.loads(websocket.recv())) or []
+    message = json.loads(websocket.recv())
+    _check_jsonrpc_error(message)
+    features = _features(message) or []
     _append_features(features, output_path, area)
     return len(features)
 
@@ -97,9 +105,6 @@ def poll_area(config: Config, area: Area, stop: threading.Event = _stop_event) -
             log.warning("[%s] connection error: %s; reconnecting in %ds", area.name, e, backoff)
             stop.wait(backoff)
             backoff = min(backoff * 2, 60)
-        except json.JSONDecodeError as e:
-            log.error("[%s] malformed response, skipping tick: %s", area.name, e)
-            stop.wait(config.interval)
 
     log.info("[%s] stopped", area.name)
 
@@ -119,23 +124,20 @@ def _drain(websocket: ClientConnection, config: Config, area: Area, stop: thread
             raw = None
         if raw is not None:
             messages += 1
-            try:
-                message = json.loads(raw)
-                # Snapshot answer to the subscribe first, then one notification per update.
-                features = _features(message)
-                if features is None:
-                    features = _pushed_features(message)
-            except json.JSONDecodeError as e:
-                log.error("[%s] malformed message, skipping: %s", area.name, e)
+            message = json.loads(raw)
+            _check_jsonrpc_error(message)
+            # Snapshot answer to the subscribe first, then one notification per update.
+            features = _features(message)
+            if features is None:
+                features = _pushed_features(message)
+            if features is not None:
+                _append_features(features, area.output_path, area.name)
+                records += len(features)
             else:
-                if features is not None:
-                    _append_features(features, area.output_path, area.name)
-                    records += len(features)
-                else:
-                    # Unexpected message type; show the first few of each connection.
-                    unknown += 1
-                    level = logging.INFO if unknown <= _UNKNOWN_SAMPLES else logging.DEBUG
-                    log.log(level, "[%s] non-feature message: %.500s", area.name, raw)
+                # Unexpected message type; show the first few of each connection.
+                unknown += 1
+                level = logging.INFO if unknown <= _UNKNOWN_SAMPLES else logging.DEBUG
+                log.log(level, "[%s] non-feature message: %.500s", area.name, raw)
         elapsed = time.monotonic() - last_report
         if elapsed >= config.interval:
             log.info(
@@ -176,7 +178,7 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
 
 
 def run(config: Config) -> None:
-    """Register signal handlers and poll every area in parallel until SIGINT/SIGTERM."""
+    """Register signal handlers and poll every area in parallel until SIGINT/SIGTERM or duration."""
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     mode = "streaming" if config.streaming else "polling"
@@ -189,9 +191,24 @@ def run(config: Config) -> None:
     ]
     for t in threads:
         t.start()
-    # Join with a timeout so the main thread stays responsive to signals.
-    while any(t.is_alive() for t in threads):
+
+    deadline = time.monotonic() + config.duration if config.duration is not None else None
+
+    # Join with a timeout so the main thread stays responsive to signals,
+    # duration, and thread crashes.
+    while not _stop_event.is_set():
+        if deadline is not None and time.monotonic() >= deadline:
+            log.info("duration of %gs reached, stopping", config.duration)
+            _stop_event.set()
+            break
+        dead = [t for t in threads if not t.is_alive()]
+        if dead:
+            _stop_event.set()
+            raise RuntimeError(f"worker thread {dead[0].name} terminated unexpectedly")
         for t in threads:
-            t.join(timeout=0.5)
+            t.join(timeout=0.1)
+
+    for t in threads:
+        t.join()
 
     log.info("stopped")

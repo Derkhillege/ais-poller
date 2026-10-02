@@ -97,23 +97,12 @@ def parse_euris_feature(feat: dict, now_iso: str) -> dict | None:
 
 def iter_records(path: Path) -> Iterator[dict]:
     """Stream parsed records from a poller NDJSON file, one line at a time."""
-    skipped = 0
-    with path.open() as f:
-        for lineno, line in enumerate(f, 1):
+    with path.open(encoding="utf-8") as f:
+        for line in f:
             if not line.strip():
                 continue
-            try:
-                feat = json.loads(line)
-                record = parse_euris_feature(feat, feat["requested_at"])
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-                log.debug("line %d: %s", lineno, e)
-                record = None
-            if record is None:
-                skipped += 1
-                continue
-            yield record
-    if skipped:
-        log.warning("skipped %d unparseable line(s) in %s", skipped, path)
+            feat = json.loads(line)
+            yield parse_euris_feature(feat, feat["requested_at"])
 
 
 def parse_file(input_path: Path, out: TextIO, fmt: str = "csv") -> int:
