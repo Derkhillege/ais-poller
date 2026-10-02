@@ -46,16 +46,12 @@ def inspect_file(path: Path) -> FileReport:
     lat_min = lon_min = float("inf")
     lat_max = lon_max = float("-inf")
 
-    with path.open() as f:
+    with path.open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
-            try:
-                feat = json.loads(line)
-                ts = feat["requested_at"]
-            except (json.JSONDecodeError, KeyError, TypeError):
-                report.bad_lines += 1
-                continue
+            feat = json.loads(line)
+            ts = feat["requested_at"]
             report.records += 1
             # Records of one tick share requested_at and are written contiguously.
             if tick_times and ts == tick_times[-1]:

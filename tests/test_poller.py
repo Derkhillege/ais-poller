@@ -156,7 +156,6 @@ def test_stream_reads_every_pushed_message(tmp_path, monkeypatch, caplog):
         _features_msg("a", "b"),
         None,
         '{"jsonrpc": "2.0", "method": "Heartbeat"}',
-        "not json",
         _features_msg("c"),
     ]
     ws = StreamingWebSocket(stop, script)
@@ -170,7 +169,28 @@ def test_stream_reads_every_pushed_message(tmp_path, monkeypatch, caplog):
     assert [r["id"] for r in lines] == ["a", "b", "c"]
     assert {r["area"] for r in lines} == {"north"}
     assert "Heartbeat" in caplog.text
-    assert "malformed message" in caplog.text
+
+
+def test_stream_fails_on_malformed_message(tmp_path, monkeypatch):
+    import pytest
+
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 10, {"id": 1, "method": "StreamFeatures"}, (area,))
+    stop = threading.Event()
+    ws = StreamingWebSocket(stop, ["not json"])
+    monkeypatch.setattr(poller, "connect", lambda _url: ws)
+
+    with pytest.raises(json.JSONDecodeError):
+        poller.stream_area(config, area, stop)
+
+
+def test_poll_fails_on_jsonrpc_error(tmp_path):
+    import pytest
+
+    out = tmp_path / "out.json"
+    ws = FakeWebSocket(json.dumps({"error": {"code": -32600, "message": "Invalid Request"}}))
+    with pytest.raises(RuntimeError, match="JSON-RPC error from server"):
+        poll_once(ws, {"id": 1}, out)
 
 
 def _push_msg(*ids: str) -> str:
@@ -221,3 +241,44 @@ def test_streaming_follows_request_method():
     areas = (Area("x", None, Path("x.ndjson")),)
     assert Config("wss://e", 10, {"id": 1, "method": "StreamFeatures"}, areas).streaming
     assert not Config("wss://e", 10, {"id": 1, "method": "GetFeatures"}, areas).streaming
+
+
+def test_run_stops_after_duration(monkeypatch, tmp_path):
+    area = Area("north", None, tmp_path / "north.ndjson")
+    config = Config(
+        "wss://example/ws",
+        1,
+        {"id": 1, "method": "GetFeatures"},
+        (area,),
+        duration=0.1,
+    )
+    poller._stop_event.clear()
+
+    # Worker that just sleeps until stop is set
+    def fake_poll_area(_config, _area, stop=poller._stop_event):
+        stop.wait(5.0)
+
+    monkeypatch.setattr(poller, "poll_area", fake_poll_area)
+    poller.run(config)
+    assert poller._stop_event.is_set()
+
+
+def test_run_fails_fast_on_worker_thread_crash(monkeypatch, tmp_path):
+    import pytest
+
+    area = Area("north", None, tmp_path / "north.ndjson")
+    config = Config(
+        "wss://example/ws",
+        1,
+        {"id": 1, "method": "GetFeatures"},
+        (area,),
+        duration=5.0,
+    )
+    poller._stop_event.clear()
+
+    def crashing_poll_area(_config, _area, _stop=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(poller, "poll_area", crashing_poll_area)
+    with pytest.raises(RuntimeError, match="terminated unexpectedly"):
+        poller.run(config)
