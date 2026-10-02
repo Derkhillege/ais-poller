@@ -100,12 +100,17 @@ def test_iter_records_on_fixture(sample_ndjson):
     assert [r["base_date_time"] for r in records] == [f["requested_at"] for f in raw]
 
 
-def test_iter_records_skips_bad_lines(tmp_path, sample_ndjson):
+def test_iter_records_fails_on_bad_lines(tmp_path, sample_ndjson):
     good = sample_ndjson.open().readline()
-    path = tmp_path / "mixed.ndjson"
-    no_ts = json.dumps(_feature())  # missing requested_at
-    path.write_text(f"{good}not json\n\n{no_ts}\n{good}")
-    assert len(list(iter_records(path))) == 2
+    path_bad_json = tmp_path / "bad_json.ndjson"
+    path_bad_json.write_text(f"{good}not json\n")
+    with pytest.raises(json.JSONDecodeError):
+        list(iter_records(path_bad_json))
+
+    path_no_ts = tmp_path / "no_ts.ndjson"
+    path_no_ts.write_text(f"{good}{json.dumps(_feature())}\n")
+    with pytest.raises(KeyError):
+        list(iter_records(path_no_ts))
 
 
 def test_parse_file_rejects_unknown_format(sample_ndjson):
