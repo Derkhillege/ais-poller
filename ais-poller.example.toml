@@ -4,6 +4,7 @@
 
 url = "wss://www.eurisportal.eu/api/AISTracks/Connect"
 interval = 10          # seconds between requests, per area (StreamFeatures: between summary log lines)
+duration = 30
 output_dir = "data"
 
 # Request template. params.filters.boundingBox is filled in per area, and each area keeps its
@@ -18,6 +19,7 @@ params.filters.filterQuery = "()"
 
 [[areas]]
 name = "moerdijk"
+id = 2
 bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # [minLat, minLon, maxLat, maxLon]
 
 # [[areas]]

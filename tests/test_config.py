@@ -1,6 +1,7 @@
 """Smoke tests for load_config — happy path and fail-fast error paths."""
 
 import json
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,52 +35,52 @@ def test_load_config_happy_path(monkeypatch):
 
 
 def test_load_config_missing_required_var(monkeypatch):
-    """Missing EURIS_WSS must raise SystemExit (fail-fast)."""
+    """Missing EURIS_WSS must raise KeyError (fail-fast)."""
     monkeypatch.delenv("EURIS_WSS", raising=False)
     monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"id": 1}))
     monkeypatch.setenv("INTERVAL", "10")
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(KeyError):
         load_config()
 
 
 def test_load_config_missing_interval(monkeypatch):
-    """Missing INTERVAL must raise SystemExit."""
+    """Missing INTERVAL must raise KeyError."""
     monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
     monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"id": 1}))
     monkeypatch.delenv("INTERVAL", raising=False)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(KeyError):
         load_config()
 
 
 def test_load_config_invalid_interval(monkeypatch):
-    """Non-integer INTERVAL must raise SystemExit."""
+    """Non-integer INTERVAL must raise ValueError."""
     monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
     monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"id": 1}))
     monkeypatch.setenv("INTERVAL", "not-a-number")
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         load_config()
 
 
 def test_load_config_malformed_request_params(monkeypatch):
-    """Invalid JSON in REQUEST_PARAMS must raise SystemExit."""
+    """Invalid JSON in REQUEST_PARAMS must raise JSONDecodeError."""
     monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
     monkeypatch.setenv("REQUEST_PARAMS", "{not valid json}")
     monkeypatch.setenv("INTERVAL", "10")
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(json.JSONDecodeError):
         load_config()
 
 
 def test_load_config_request_params_missing_id(monkeypatch):
-    """REQUEST_PARAMS without 'id' field must raise SystemExit."""
+    """REQUEST_PARAMS without 'id' field must raise ValueError."""
     monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
     monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"method": "getVessels"}))
     monkeypatch.setenv("INTERVAL", "10")
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         load_config()
 
 
@@ -202,20 +203,20 @@ def test_toml_overrides(tmp_path):
 )
 def test_toml_invalid(tmp_path, old, new):
     assert old in TOML
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         load_config(config_file=_write(tmp_path, TOML.replace(old, new, 1)))
 
 
 def test_toml_requires_areas(tmp_path):
     text = TOML.split("[[areas]]")[0]
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValueError):
         load_config(config_file=_write(tmp_path, text))
 
 
 def test_toml_missing_or_malformed_file(tmp_path):
-    with pytest.raises(SystemExit):
+    with pytest.raises(FileNotFoundError):
         load_config(config_file=tmp_path / "nope.toml")
-    with pytest.raises(SystemExit):
+    with pytest.raises(tomllib.TOMLDecodeError):
         load_config(config_file=_write(tmp_path, "url = "))
 
 
@@ -223,3 +224,14 @@ def test_example_config_is_valid():
     example = Path(__file__).parent.parent / "ais-poller.example.toml"
     config = load_config(config_file=example)
     assert [a.name for a in config.areas] == ["moerdijk"]
+    assert config.duration == 30.0
+    assert config.areas[0].id == 2
+
+
+def test_load_config_duration(tmp_path, monkeypatch):
+    monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
+    monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"id": 1}))
+    monkeypatch.setenv("INTERVAL", "10")
+    monkeypatch.setenv("DURATION", "45")
+    assert load_config().duration == 45.0
+    assert load_config(duration=15.0).duration == 15.0
