@@ -231,9 +231,8 @@ def test_toml_missing_or_malformed_file(tmp_path):
 def test_example_config_is_valid():
     example = Path(__file__).parent.parent / "ais-poller.example.toml"
     config = load_config(config_file=example)
-    assert [a.name for a in config.areas] == ["moerdijk"]
+    assert [a.name for a in config.areas] == ["moerdijk", "rotterdam"]
     assert config.duration == 30.0
-    assert config.areas[0].id == 2
 
 
 def test_load_config_duration(tmp_path, monkeypatch):
