@@ -1,3 +1,21 @@
+# ais-poller - For polling sockets and parsing them into flat vessel records.
+# Copyright (C) 2026  Derk Hillege
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import argparse
 import logging
 import os
@@ -5,6 +23,7 @@ import sys
 from pathlib import Path
 
 from ais_poller import __version__
+from ais_poller.license import print_startup_notice
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -60,6 +79,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("files", nargs="+", type=Path, help="NDJSON files written by `poll`")
     inspect.add_argument("--json", action="store_true", help="machine-readable output")
+
+    lic = sub.add_parser("license", help="show this program's GPL licensing notice")
+    details = lic.add_mutually_exclusive_group()
+    details.add_argument(
+        "--warranty", action="store_true", help="show the warranty disclaimer (GPL sections 15-17)"
+    )
+    details.add_argument(
+        "--conditions", action="store_true", help="show the redistribution conditions"
+    )
     return parser
 
 
@@ -100,6 +128,18 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _license(args: argparse.Namespace) -> int:
+    from ais_poller.license import CONDITIONS, WARRANTY, startup_notice
+
+    if args.warranty:
+        print(WARRANTY)
+    elif args.conditions:
+        print(CONDITIONS)
+    else:
+        print(startup_notice())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for `ais-poller`."""
     args = _build_parser().parse_args(argv)
@@ -107,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    if args.command == "license":
+        return _license(args)
+    # The GPL asks interactive programs to show a short notice at startup.
+    print_startup_notice()
     if args.command == "parse":
         return _parse(args)
     if args.command == "inspect":

@@ -1,10 +1,30 @@
+# ais-poller - For polling sockets and parsing them into flat vessel records.
+# Copyright (C) 2026  Derk Hillege
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [project]
 name = "ais-poller"
 version = "0.1.0"
-description = "Polls the EuRIS WebSocket for AIS vessel features to NDJSON and parses them into flat vessel records."
+description = "For polling sockets and parsing them into flat vessel records."
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [{ name = "Derk Hillege", email = "derkhillege@protonmail.com" }]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 keywords = ["ais", "euris", "vessel", "websocket", "ndjson"]
 classifiers = [
     "Environment :: Console",
@@ -31,6 +51,10 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ais-poller]
+# Single source for the copyright year in the GPL notices (CLI notice and file headers).
+copyright-year = "2026"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ais_poller"]
