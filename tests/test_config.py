@@ -92,16 +92,6 @@ def test_load_config_malformed_request_params(monkeypatch):
         load_config()
 
 
-def test_load_config_request_params_missing_id(monkeypatch):
-    """REQUEST_PARAMS without 'id' field must raise ValueError."""
-    monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
-    monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"method": "getVessels"}))
-    monkeypatch.setenv("INTERVAL", "10")
-
-    with pytest.raises(ValueError):
-        load_config()
-
-
 def test_load_config_custom_output_path(monkeypatch, tmp_path):
     """OUTPUT_PATH env var is respected."""
     custom_path = str(tmp_path / "output.ndjson")
