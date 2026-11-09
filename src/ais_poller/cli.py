@@ -24,12 +24,15 @@ from pathlib import Path
 
 from ais_poller import __version__
 from ais_poller.license import print_startup_notice
+from ais_poller.metadata import project_metadata
+
+_META = project_metadata()
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ais-poller",
-        description="Poll the EuRIS AIS WebSocket to NDJSON and parse the collected results.",
+        prog=_META.name,
+        description=_META.summary,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
