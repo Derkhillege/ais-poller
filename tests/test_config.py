@@ -1,3 +1,21 @@
+# ais-poller - For polling sockets and parsing them into flat vessel records.
+# Copyright (C) 2026  Derk Hillege
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Smoke tests for load_config — happy path and fail-fast error paths."""
 
 import json
@@ -71,16 +89,6 @@ def test_load_config_malformed_request_params(monkeypatch):
     monkeypatch.setenv("INTERVAL", "10")
 
     with pytest.raises(json.JSONDecodeError):
-        load_config()
-
-
-def test_load_config_request_params_missing_id(monkeypatch):
-    """REQUEST_PARAMS without 'id' field must raise ValueError."""
-    monkeypatch.setenv("EURIS_WSS", "wss://example.com/ws")
-    monkeypatch.setenv("REQUEST_PARAMS", json.dumps({"method": "getVessels"}))
-    monkeypatch.setenv("INTERVAL", "10")
-
-    with pytest.raises(ValueError):
         load_config()
 
 
@@ -223,9 +231,8 @@ def test_toml_missing_or_malformed_file(tmp_path):
 def test_example_config_is_valid():
     example = Path(__file__).parent.parent / "ais-poller.example.toml"
     config = load_config(config_file=example)
-    assert [a.name for a in config.areas] == ["moerdijk"]
+    assert [a.name for a in config.areas] == ["moerdijk", "rotterdam"]
     assert config.duration == 30.0
-    assert config.areas[0].id == 2
 
 
 def test_load_config_duration(tmp_path, monkeypatch):

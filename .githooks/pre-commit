@@ -1,0 +1,80 @@
+#!/bin/sh
+# ais-poller - For polling sockets and parsing them into flat vessel records.
+# Copyright (C) 2026  Derk Hillege
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# ais-poller pre-commit hook: make sure every staged source file carries the GPL notice.
+#
+# Enable it once per clone with:
+#     git config core.hooksPath .githooks
+#
+# Files that are fully staged get the notice inserted and are re-staged automatically.
+# Files with unstaged changes are left for you to review: the notice is written to the
+# working tree and the commit is aborted, so the hook never stages work you did not stage.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+adder="$root/scripts/add_license_headers.py"
+[ -f "$adder" ] || exit 0
+
+python=$(command -v python3 || command -v python || true)
+if [ -z "$python" ]; then
+    echo "pre-commit: no python found, skipping the GPL notice check" >&2
+    exit 0
+fi
+
+staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# Files still needing the notice, split by whether the working tree matches the index.
+clean=""
+dirty=""
+IFS='
+'
+for file in $staged; do
+    [ -f "$root/$file" ] || continue
+    "$python" "$adder" --check "$root/$file" >/dev/null && continue
+    if git -c core.quotePath=false diff --name-only -- "$file" | grep -qx -- "$file"; then
+        dirty="$dirty$file
+"
+    else
+        clean="$clean$file
+"
+    fi
+done
+unset IFS
+
+[ -n "$clean$dirty" ] || exit 0
+
+printf '%s' "$clean$dirty" | while IFS= read -r file; do
+    "$python" "$adder" "$root/$file"
+done
+
+printf '%s' "$clean" | while IFS= read -r file; do
+    git add -- "$file"
+done
+
+if [ -n "$dirty" ]; then
+    echo "pre-commit: added the GPL notice to these partially staged files:" >&2
+    printf '%s' "$dirty" | while IFS= read -r file; do
+        echo "  $file" >&2
+    done
+    echo "Review the change and stage it (git add), then commit again." >&2
+    exit 1
+fi
+
+exit 0

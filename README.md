@@ -106,3 +106,38 @@ uv run pytest              # fast suite (uses tests/fixtures/sample.ndjson)
 uv run pytest -m slow      # full data.json test set, if present
 uv run ruff check . && uv run ruff format --check .
 ```
+
+### License headers
+
+Every source file carries the GPL notice, kept in place by a pre-commit hook. Enable it once
+per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook inserts the notice into staged files that are missing it and re-stages them. A file
+with unstaged changes is never re-staged: the notice is written to the working tree and the
+commit is aborted so you can review it. The same tool runs by hand:
+
+```sh
+python3 scripts/add_license_headers.py            # whole repo, insert or refresh
+python3 scripts/add_license_headers.py --check    # report only, exit 1 if any differ
+```
+
+The notice text is not hardcoded: project name, description and author come from the
+`[project]` table of `pyproject.toml` and the year from `[tool.ais-poller] copyright-year`
+(`src/ais_poller/metadata.py` resolves them, falling back to the installed distribution
+metadata when there is no source tree). Change any of those and re-run the script — headers
+that no longer match are rewritten in place, so the CLI notice and the file headers stay in
+step.
+
+It covers `.py`, `.sh`, `.toml`, `.yml`/`.yaml`, `.cfg`/`.ini` and extensionless scripts with a
+shebang, and skips generated, vendored and data directories (see `SKIP_DIRS` in the script).
+
+## License
+
+ais-poller is free software under the GNU General Public License, version 3 or (at your option)
+any later version — see [LICENSE](LICENSE). Started interactively it prints the short GPL
+notice to stderr; `ais-poller license`, `ais-poller license --warranty` and
+`ais-poller license --conditions` print it and the details on demand.
