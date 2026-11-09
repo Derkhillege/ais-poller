@@ -120,7 +120,7 @@ def iter_records(path: Path) -> Iterator[dict]:
             if not line.strip():
                 continue
             feat = json.loads(line)
-            yield parse_euris_feature(feat, feat["requested_at"])
+            yield parse_euris_feature(feat, feat["timestamp"])
 
 
 def parse_file(input_path: Path, out: TextIO, fmt: str = "csv") -> int:

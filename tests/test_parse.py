@@ -115,7 +115,7 @@ def test_iter_records_on_fixture(sample_ndjson):
     raw = [json.loads(line) for line in sample_ndjson.open()]
     assert len(records) == len(raw) == 727
     assert all(list(r) == FIELDS for r in records)
-    assert [r["base_date_time"] for r in records] == [f["requested_at"] for f in raw]
+    assert [r["base_date_time"] for r in records] == [f["timestamp"] for f in raw]
 
 
 def test_iter_records_fails_on_bad_lines(tmp_path, sample_ndjson):

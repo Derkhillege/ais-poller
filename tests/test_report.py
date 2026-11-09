@@ -29,7 +29,7 @@ from ais_poller.sink import ParquetSink
 def _line(ts, area="north", track="1", lat=51.7, lon=4.3):
     feat = {
         "properties": {"TrackID": track, "Lat": lat, "Lon": lon},
-        "requested_at": ts,
+        "timestamp": ts,
         "area": area,
     }
     return json.dumps(feat) + "\n"
@@ -85,7 +85,7 @@ def test_inspect_parquet_dataset_matches_ndjson(tmp_path, capsys, sample_ndjson)
     with ParquetSink(tmp_path / "area=north", 3600) as sink, sample_ndjson.open() as f:
         for line in f:
             feat = json.loads(line)
-            sink.write([feat], datetime.fromisoformat(feat["requested_at"]))
+            sink.write([feat], datetime.fromisoformat(feat["timestamp"]))
 
     r = inspect_file(tmp_path)
     expected = inspect_file(sample_ndjson)

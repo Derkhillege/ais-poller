@@ -96,7 +96,7 @@ class NdjsonSink(_ContextSink):
         stamp = received_at.isoformat()
         with self.path.open("a") as f:
             for record in features:
-                record["requested_at"] = stamp
+                record["timestamp"] = stamp
                 if self.area is not None:
                     record["area"] = self.area
                 json.dump(record, f)
@@ -112,7 +112,8 @@ def _wkb_point(lon: float, lat: float) -> bytes:
 class ParquetSink(_ContextSink):
     """Parse features on arrival and stream them into zstd GeoParquet, one file per window.
 
-    Files go to <root>/date=YYYY-MM-DD/part-<start>Z.parquet. Windows are aligned to multiples of
+    Files go to <root>/year=YYYY/month=MM/day=DD/part-<start>Z.parquet, the Hive layout the
+    ais-shader GeoParquet spec expects. Windows are aligned to multiples of
     rotate_s seconds (UTC); a Parquet file is only readable once its footer is written, so the
     open file is a hidden .part-*.tmp that is renamed when the window ends or the sink closes.
     """
@@ -159,7 +160,7 @@ class ParquetSink(_ContextSink):
         self._window = None
 
     def _open_file(self, start: datetime) -> None:
-        directory = self.root / f"date={start.date().isoformat()}"
+        directory = self.root / f"year={start:%Y}" / f"month={start:%m}" / f"day={start:%d}"
         directory.mkdir(parents=True, exist_ok=True)
         name = f"part-{start:%Y%m%dT%H%M%S}Z"
         # A restart within the same second must not overwrite a finished file.
