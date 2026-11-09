@@ -10,7 +10,7 @@ Key invariants, updated 2026-09-26 after the CLI / multi-area restructure (see C
 - `poll_area` catches `WebSocketException | OSError`; backoff starts at 1s, doubles, caps at 60s, resets to 1 on successful connect.
 - `json.JSONDecodeError` is caught outside the `with connect(...)` block, so a malformed response closes the socket, waits `interval`, and reconnects; `id` is not incremented for that tick.
 - Shutdown: SIGINT/SIGTERM set the module-level `threading.Event` `_stop_event`. All waits use `stop.wait(...)`, never `time.sleep`, so threads wake immediately. `run()` joins area threads with a timeout so the main thread stays responsive to signals.
-- Records are appended one line at a time (NDJSON) with `requested_at = datetime.now(UTC).isoformat()` at receive time, plus `area`. Each area writes its own file; config validation rejects two areas sharing an output path.
+- Records are appended one line at a time (NDJSON) with `timestamp = datetime.now(UTC).isoformat()` at receive time, plus `area`. Each area writes its own file; config validation rejects two areas sharing an output path.
 - Poll, parse and inspect must all stream — flag anything that loads a whole NDJSON file into memory.
 - Config is TOML only (`ais-poller.toml` by default; env-var/`.env` mode was removed 2026-09-26). It fails fast with `SystemExit`: url, positive interval (also when overridden by `--interval`), `[request]` with integer id, ≥1 area with safe unique name and valid bbox.
 - The devcontainer cannot reach EuRIS; live behaviour is only verified by the user locally (results in gitignored `local-runs/`).

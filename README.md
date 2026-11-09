@@ -46,7 +46,7 @@ Stop with Ctrl-C / SIGTERM; all areas shut down together.
 ### Output formats
 
 **`format = "ndjson"`** (default, uncompressed): each line is the raw GeoJSON Feature plus a
-`requested_at` UTC timestamp and the `area` name, appended as it arrives. Nothing is lost on a
+`timestamp` UTC timestamp and the `area` name, appended as it arrives. Nothing is lost on a
 hard kill. Convert with `ais-poller parse`.
 
 **`format = "parquet"`** (compressed): every feature is parsed on arrival (same columns as
@@ -55,8 +55,8 @@ hard kill. Convert with `ais-poller parse`.
 per area and day:
 
 ```
-data/area=moerdijk/date=2026-09-26/part-20260926T010000Z.parquet
-data/area=moerdijk/date=2026-09-26/.part-20260926T020000Z.parquet.tmp   ← still being written
+data/area=moerdijk/year=2026/month=09/day=26/part-20260926T010000Z.parquet
+data/area=moerdijk/year=2026/month=09/day=26/.part-20260926T020000Z.parquet.tmp   ← still being written
 ```
 
 Each area thread writes its own files, and a new file starts every `rotate` seconds (aligned to
@@ -93,7 +93,7 @@ Output columns:
 | Column           | Source                                                        |
 |------------------|---------------------------------------------------------------|
 | `mmsi`           | `MMSI`, falling back to `TrackID` / feature id when `0`       |
-| `base_date_time` | `requested_at`                                                |
+| `base_date_time` | `timestamp`                                                |
 | `latitude`, `longitude` | `Lat`/`Lon`, falling back to the geometry              |
 | `sog`, `cog`     | `SOG`, `COG`                                                  |
 | `heading`        | `TH` if > 0, else `COG`                                       |
@@ -171,3 +171,28 @@ ais-poller is free software under the GNU General Public License, version 3 or (
 any later version — see [LICENSE](LICENSE). Started interactively it prints the short GPL
 notice to stderr; `ais-poller license`, `ais-poller license --warranty` and
 `ais-poller license --conditions` print it and the details on demand.
+
+## Conformance with `ais-shader`
+
+The Parquet output follows the GeoParquet dataset specification of
+[TUDelft-CITG/ais-colab](https://github.com/TUDelft-CITG/ais-colab)
+(`docs/geoparquet_specification.md`): WKB `Point` geometry in WGS84 with GeoParquet `geo`
+metadata, the spec's default column names and types (`mmsi`, `base_date_time` as
+`timestamp[us, UTC]`, `longitude`, `latitude`, `sog`, `cog`, `heading`, `length`, `beam`,
+`shiptypeAIS`, `status`), and Hive `year=`/`month=`/`day=` partition directories that
+`ais_shader.data_loader.detect_hive_partitioning()` discovers.
+
+### Testing conformance
+
+```sh
+ais-poller check data/area=moerdijk        # a dataset directory, or single .parquet files
+ais-poller check local-runs/2026-09-26/*.parquet
+```
+
+It reports the file and row count, the partition keys it found, and every deviation from the
+spec (missing or wrongly typed columns, absent `geo` metadata, a non-Hive layout, values outside
+the documented ranges such as `sog` over 102.2 kn or a `heading` that is neither < 360 nor 511).
+Exit status is 0 when the dataset conforms and 1 when it does not, so it drops into CI or a
+post-run script. The same checks run in `uv run pytest tests/test_conformance.py`, which writes
+a small dataset through the real sink, re-reads it with `pyarrow.dataset(..., partitioning="hive")`
+the way the pipeline does, and asserts that a flat or metadata-less dataset is rejected.

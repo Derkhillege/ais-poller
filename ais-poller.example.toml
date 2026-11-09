@@ -27,7 +27,7 @@ duration = 30
 output_path = "data"
 # "ndjson": raw features, one uncompressed line each (default; convert with `ais-poller parse`).
 # "parquet": parsed on arrival into zstd GeoParquet, Hive-partitioned as
-#            area=<name>/date=YYYY-MM-DD/part-<start>Z.parquet, one file per `rotate` seconds.
+#            area=<name>/year=YYYY/month=MM/day=DD/part-<start>Z.parquet, one per `rotate` s.
 format = "ndjson"
 rotate = 3600          # seconds per Parquet file; the open file is a hidden .tmp until it closes
 
@@ -43,6 +43,7 @@ params.filters.filterQuery = "()"
 [[areas]]
 name = "moerdijk"
 bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # [minLat, minLon, maxLat, maxLon]
+
 
 [[areas]]
 name = "rotterdam"

@@ -56,7 +56,7 @@ def test_poll_once_appends_stamped_features(tmp_path):
     lines = [json.loads(line) for line in out.read_text().splitlines()]
     assert lines[0] == {"existing": True}
     assert [r["id"] for r in lines[1:]] == ["1", "2"]
-    assert all(datetime.fromisoformat(r["requested_at"]).tzinfo for r in lines[1:])
+    assert all(datetime.fromisoformat(r["timestamp"]).tzinfo for r in lines[1:])
 
 
 def test_poll_once_without_features_writes_nothing(tmp_path):
@@ -247,7 +247,7 @@ def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
     lines = [json.loads(line) for line in area.output_path.read_text().splitlines()]
     assert [r["id"] for r in lines] == ["a", "181", "26", "39"]
     assert lines[1]["properties"] == {"Id": "181"}
-    assert all("requested_at" in r and r["area"] == "north" for r in lines)
+    assert all("timestamp" in r and r["area"] == "north" for r in lines)
     assert "non-feature message" not in caplog.text
 
 

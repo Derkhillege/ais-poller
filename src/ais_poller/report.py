@@ -63,7 +63,7 @@ def _ndjson_rows(path: Path, report: FileReport) -> Iterator[Row]:
                 continue
             try:
                 feat = json.loads(line)
-                ts = feat["requested_at"]
+                ts = feat["timestamp"]
             except (json.JSONDecodeError, KeyError, TypeError):
                 report.bad_lines += 1
                 continue

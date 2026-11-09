@@ -96,6 +96,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("--json", action="store_true", help="machine-readable output")
 
+    check = sub.add_parser(
+        "check",
+        help="verify Parquet output against the ais-shader GeoParquet specification",
+    )
+    check.add_argument(
+        "paths", nargs="+", type=Path, help="Parquet file(s) or dataset directory(ies)"
+    )
+
     lic = sub.add_parser("license", help="show this program's GPL licensing notice")
     details = lic.add_mutually_exclusive_group()
     details.add_argument(
@@ -163,6 +171,14 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check(args: argparse.Namespace) -> int:
+    from ais_poller.conformance import check_dataset, format_result
+
+    results = [check_dataset(p) for p in args.paths]
+    print("\n\n".join(format_result(r) for r in results))
+    return 0 if all(r.ok for r in results) else 1
+
+
 def _license(args: argparse.Namespace) -> int:
     from ais_poller.license import CONDITIONS, WARRANTY, startup_notice
 
@@ -190,4 +206,6 @@ def main(argv: list[str] | None = None) -> int:
         return _parse(args)
     if args.command == "inspect":
         return _inspect(args)
+    if args.command == "check":
+        return _check(args)
     return _poll(args)
