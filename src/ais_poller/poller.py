@@ -163,7 +163,7 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
         try:
             with connect(config.wss_url) as websocket:
                 websocket.send(json.dumps(request_params))
-                log.info("[%s] subscribed (id=%s)", area.name, request_params["id"])
+                log.info("[%s] subscribed (id=%s)", area.name, request_params.get("id", "unknown id"))
                 request_params["id"] += 1
                 backoff = 1
                 _drain(websocket, config, area, stop)

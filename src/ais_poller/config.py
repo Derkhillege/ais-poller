@@ -101,7 +101,8 @@ def _load_env(
     interval = interval if interval is not None else int(os.environ["INTERVAL"])
     if duration is None and "DURATION" in os.environ:
         duration = float(os.environ["DURATION"])
-
+    if "id" not in request_params:
+        request_params["id"] = 0
     _check_request(request_params, "REQUEST_PARAMS")
     output_path = output_path or Path(os.getenv("OUTPUT_PATH", "data.json"))
     # The bounding box stays inside REQUEST_PARAMS, so the request is sent exactly as configured.
@@ -139,6 +140,8 @@ def _load_toml(
         duration = float(raw_duration)
 
     request = data.get("request")
+    if "id" not in request:
+        request["id"] = 0
     _check_request(request, f"{path}: [request]")
 
     output_dir = output_dir or Path(data.get("output_dir", "."))
