@@ -1,3 +1,21 @@
+# ais-poller - For polling sockets and parsing them into flat vessel records.
+# Copyright (C) 2026  Derk Hillege
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import json
 import logging
 import signal
@@ -163,7 +181,9 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
         try:
             with connect(config.wss_url) as websocket:
                 websocket.send(json.dumps(request_params))
-                log.info("[%s] subscribed (id=%s)", area.name, request_params.get("id", "unknown id"))
+                log.info(
+                    "[%s] subscribed (id=%s)", area.name, request_params.get("id", "unknown id")
+                )
                 request_params["id"] += 1
                 backoff = 1
                 _drain(websocket, config, area, stop)
