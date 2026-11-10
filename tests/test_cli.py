@@ -61,3 +61,51 @@ def test_poll_defaults_to_ais_poller_toml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match=r"ais-poller\.toml.*ais-poller\.example\.toml"):
         main(["poll"])
+
+
+POLL_TOML = """
+url = "wss://example.com/ws"
+interval = 1
+duration = 30
+
+[request]
+jsonrpc = "2.0"
+method = "StreamFeatures"
+
+[[areas]]
+name = "north"
+bbox = [51.0, 4.0, 52.0, 5.0]
+"""
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        ([], 30.0),  # from the file
+        (["--duration", "5"], 5.0),  # flag wins
+        (["-d", "0.5"], 0.5),  # fractions allowed
+    ],
+)
+def test_poll_passes_duration_to_run(tmp_path, monkeypatch, argv, expected):
+    """The TOML `duration` must reach run(), not just the --duration flag."""
+    from ais_poller import poller
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ais-poller.toml").write_text(POLL_TOML)
+    seen = []
+    monkeypatch.setattr(poller, "run", lambda config: seen.append(config.duration))
+
+    assert main(["poll", *argv]) == 0
+    assert seen == [expected]
+
+
+def test_poll_without_duration_runs_until_stopped(tmp_path, monkeypatch):
+    from ais_poller import poller
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ais-poller.toml").write_text(POLL_TOML.replace("duration = 30", ""))
+    seen = []
+    monkeypatch.setattr(poller, "run", lambda config: seen.append(config.duration))
+
+    assert main(["poll"]) == 0
+    assert seen == [None]

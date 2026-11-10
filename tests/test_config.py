@@ -124,12 +124,33 @@ def test_toml_overrides(tmp_path):
         ('output = "elsewhere/south.json"', 'output = "out/north.ndjson"'),
         ("interval = 10", 'interval = 10\nformat = "csv"'),
         ("interval = 10", "interval = 10\nrotate = 0"),
+        ("interval = 10", "interval = 10\nduration = 0"),
+        ("interval = 10", "interval = 10\nduration = -5"),
+        ("interval = 10", 'interval = 10\nduration = "30"'),
+        ('name = "south"', 'name = "south"\nid = "one"'),
     ],
 )
 def test_toml_invalid(tmp_path, old, new):
     assert old in TOML
     with pytest.raises(SystemExit):
         load_config(_write(tmp_path, TOML.replace(old, new, 1)))
+
+
+def test_duration_defaults_to_none(tmp_path):
+    """No duration anywhere means run until SIGINT/SIGTERM."""
+    assert load_config(_write(tmp_path, TOML)).duration is None
+
+
+def test_toml_duration_is_read(tmp_path):
+    text = TOML.replace("interval = 10", "interval = 10\nduration = 30")
+    assert load_config(_write(tmp_path, text)).duration == 30.0
+
+
+def test_duration_override_beats_the_file(tmp_path):
+    text = TOML.replace("interval = 10", "interval = 10\nduration = 30")
+    assert load_config(_write(tmp_path, text), duration=2.5).duration == 2.5
+    with pytest.raises(SystemExit, match="duration"):
+        load_config(_write(tmp_path, text), duration=-1)
 
 
 def test_format_defaults_to_ndjson(tmp_path):
