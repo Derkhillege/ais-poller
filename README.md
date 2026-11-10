@@ -172,6 +172,51 @@ any later version — see [LICENSE](LICENSE). Started interactively it prints th
 notice to stderr; `ais-poller license`, `ais-poller license --warranty` and
 `ais-poller license --conditions` print it and the details on demand.
 
+## What EuRIS actually sends
+
+The AISTracks socket is undocumented, so every streaming run records the message kinds it sees
+to `<output_dir>/protocol/<area>.json` — one entry per distinct message signature with its
+count, first and last sighting, and one truncated sample (shapes, not a position archive).
+Catalogues are written after each connection, so an interrupted run still leaves its evidence.
+
+```sh
+ais-poller protocol data/protocol              # table of message kinds, most frequent first
+ais-poller protocol data/protocol --markdown   # evidence section for docs/euris-protocol.md
+```
+
+[`docs/euris-protocol.md`](docs/euris-protocol.md) records what is **observed** versus what is
+still **assumed**, and is how an assumption gets promoted: paste the generated section in.
+
+## Area handoffs
+
+A subscription only reports tracks inside its own bounding box, so EuRIS announces a vessel
+leaving one with an `outOfBoundingBox` notification. Those are recorded per area as JSON lines
+in `<output_dir>/events/<area>.ndjson`, deliberately outside the vessel dataset:
+
+```json
+{"event": "exit", "area": "moerdijk", "observed_at": "2026-09-26T10:00:00+00:00",
+ "track_id": "…", "mmsi": 244660000, "latitude": 51.7, "longitude": 4.3, "raw": {…}}
+```
+
+With adjoining areas, pairing an exit with the next ping of the same track elsewhere gives the
+crossing:
+
+```sh
+ais-poller handoffs data                      # data/ holds events/ and the area datasets
+ais-poller handoffs data --window 1800 --json # widen the match window, machine-readable
+```
+
+```text
+exits: 2  handoffs: 1
+       track  from         to              gap_s  exit_at
+        t-1   moerdijk     rotterdam        30.0  2026-09-26T10:00:00+00:00
+```
+
+Each exit is matched to the *earliest* ping of that track in a different area within
+`--window` seconds after it (and `--tolerance` seconds before it, for overlapping boxes or clock
+skew), on either `track_id` or `mmsi`. It reads NDJSON and Parquet areas alike and streams them,
+so memory grows with the number of exits, not the number of records.
+
 ## Conformance with `ais-shader`
 
 The Parquet output follows the GeoParquet dataset specification of

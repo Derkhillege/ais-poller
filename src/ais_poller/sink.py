@@ -81,6 +81,27 @@ class _ContextSink:
     ) -> None:
         self.close()
 
+    #: Sibling NDJSON file for exit events, set by the subclasses; None disables writing them.
+    events_path: Path | None = None
+
+    def write_exits(self, exits: list[dict[str, Any]], observed_at: datetime, area: str) -> int:
+        """Append one JSON line per track that left area's bounding box.
+
+        Events go to a sibling `events/<area>.ndjson`, never into the Parquet point dataset,
+        which must keep the schema ais-shader expects. Each line carries the identifiers of
+        both sides of a handoff (`track_id` and `mmsi`) plus the time it was seen, so an exit
+        from one area joins to the next ping of the same track in a neighbouring area.
+        """
+        if self.events_path is None or not exits:
+            return 0
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = observed_at.astimezone(UTC).isoformat()
+        with self.events_path.open("a") as f:
+            for event in exits:
+                json.dump({"event": "exit", "area": area, "observed_at": stamp, **event}, f)
+                f.write("\n")
+        return len(exits)
+
     def close(self) -> None:
         pass
 
@@ -88,8 +109,8 @@ class _ContextSink:
 class NdjsonSink(_ContextSink):
     """Append raw features as JSON lines, stamped with the receive time and area."""
 
-    def __init__(self, path: Path, area: str | None = None):
-        self.path, self.area = path, area
+    def __init__(self, path: Path, area: str | None = None, events_path: Path | None = None):
+        self.path, self.area, self.events_path = path, area, events_path
         path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, features: list[Any], received_at: datetime) -> int:
@@ -118,8 +139,15 @@ class ParquetSink(_ContextSink):
     open file is a hidden .part-*.tmp that is renamed when the window ends or the sink closes.
     """
 
-    def __init__(self, root: Path, rotate_s: int, flush_rows: int = FLUSH_ROWS):
+    def __init__(
+        self,
+        root: Path,
+        rotate_s: int,
+        flush_rows: int = FLUSH_ROWS,
+        events_path: Path | None = None,
+    ):
         self.root, self.rotate_s, self.flush_rows = root, rotate_s, flush_rows
+        self.events_path = events_path
         self._window: tuple[int, str] | None = None
         self._tmp: Path | None = None
         self._final: Path | None = None
@@ -200,8 +228,18 @@ class ParquetSink(_ContextSink):
 Sink = NdjsonSink | ParquetSink
 
 
+def events_path_for(area: Area) -> Path:
+    """Where an area's exit events go: a sibling `events/<name>.ndjson`, outside the dataset.
+
+    `output_path` is `<output dir>/<name>.ndjson` for NDJSON and the dataset directory
+    `<output dir>/area=<name>` for Parquet, so its parent is the output directory either way.
+    """
+    return area.output_path.parent / "events" / f"{area.name}.ndjson"
+
+
 def open_sink(config: Config, area: Area) -> Sink:
     """Return the sink for area's configured output format."""
+    events = events_path_for(area)
     if config.format == "parquet":
-        return ParquetSink(area.output_path, config.rotate)
-    return NdjsonSink(area.output_path, area.name)
+        return ParquetSink(area.output_path, config.rotate, events_path=events)
+    return NdjsonSink(area.output_path, area.name, events_path=events)

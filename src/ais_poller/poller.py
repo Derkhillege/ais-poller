@@ -29,6 +29,7 @@ from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
 
 from ais_poller.config import Area, Config
+from ais_poller.protocol import Catalog, catalog_path_for
 from ais_poller.sink import Sink, open_sink
 
 log = logging.getLogger("ais_poller")
@@ -73,6 +74,65 @@ def _pushed_features(message: Any) -> list[Any] | None:
     return [json.loads(p) if isinstance(p, str) else p for p in params]
 
 
+#: Stream notification methods that announce a track leaving the subscribed bounding box.
+_EXIT_METHODS = {"outofboundingbox", "outsideboundingbox", "featureremoved"}
+
+
+def _payload_id(payload: Any, *keys: str, bare_ok: bool = False) -> Any:
+    """First non-empty value of keys in payload; with bare_ok, a non-dict payload is the value."""
+    if not isinstance(payload, dict):
+        return payload if bare_ok and payload not in (None, "") else None
+    if isinstance(payload, dict):
+        for key in keys:
+            for name in (key, key.lower(), key.upper(), key.capitalize()):
+                value = payload.get(name)
+                if value not in (None, "", 0):
+                    return value
+        return None
+
+
+def _pushed_exits(message: Any) -> list[dict[str, Any]] | None:
+    """Return one exit record per track in an out-of-bounding-box notification, else None.
+
+    EuRIS announces a track leaving the subscribed box with a notification whose method is
+    `outOfBoundingBox`. Its params are read the same way as `featureStream`'s: a list whose
+    entries are feature JSON strings, feature objects, or bare track ids. Anything the payload
+    does not carry stays None, and the raw payload is kept so a record is never lost.
+    """
+    if not isinstance(message, dict):
+        return None
+    method = message.get("method")
+    if not isinstance(method, str) or method.lower() not in _EXIT_METHODS:
+        return None
+
+    params = message.get("params")
+    if isinstance(params, dict):
+        params = params.get("features") or params.get("tracks") or params.get("ids") or [params]
+    if not isinstance(params, list):
+        params = [params]
+
+    exits = []
+    for param in params:
+        payload = param
+        if isinstance(param, str):
+            try:
+                payload = json.loads(param)
+            except json.JSONDecodeError:
+                payload = param  # a bare track id
+        properties = payload.get("properties", payload) if isinstance(payload, dict) else payload
+        exits.append(
+            {
+                "track_id": _payload_id(properties, "TrackID", "trackId", "id", bare_ok=True),
+                "mmsi": _payload_id(properties, "MMSI"),
+                "latitude": _payload_id(properties, "Lat", "latitude"),
+                "longitude": _payload_id(properties, "Lon", "longitude"),
+                "method": method,
+                "raw": payload,
+            }
+        )
+    return exits
+
+
 def poll_once(websocket: ClientConnection, request_params: dict[str, Any], sink: Sink) -> int:
     """Send one request, receive the response, and write its features to sink."""
     websocket.send(json.dumps(request_params))
@@ -114,14 +174,19 @@ def _poll_loop(
 
 
 def _drain(
-    websocket: ClientConnection, config: Config, area: Area, sink: Sink, stop: threading.Event
+    websocket: ClientConnection,
+    config: Config,
+    area: Area,
+    sink: Sink,
+    stop: threading.Event,
+    catalog: Catalog | None = None,
 ) -> None:
     """Read every pushed message until stop is set, logging a summary every interval seconds.
 
     The socket must never sit unread: once websockets' receive queue fills it stops reading
     the network, pongs go unseen and the keepalive ping times out.
     """
-    messages = records = unknown = 0
+    messages = records = exits = unknown = 0
     last_report = time.monotonic()
     while not stop.is_set():
         try:
@@ -131,6 +196,9 @@ def _drain(
         if raw is not None:
             messages += 1
             message = json.loads(raw)
+            if catalog is not None:
+                # Evidence of what EuRIS actually sends; the protocol is otherwise undocumented.
+                catalog.record(raw, message)
             _check_jsonrpc_error(message)
             # Snapshot answer to the subscribe first, then one notification per update.
             features = _features(message)
@@ -138,6 +206,9 @@ def _drain(
                 features = _pushed_features(message)
             if features is not None:
                 records += sink.write(features, datetime.now(UTC))
+            elif (left := _pushed_exits(message)) is not None:
+                # A track left this box; recorded so a handoff to a neighbouring area is visible.
+                exits += sink.write_exits(left, datetime.now(UTC), area.name)
             else:
                 # Unexpected message type; show the first few of each connection.
                 unknown += 1
@@ -146,13 +217,14 @@ def _drain(
         elapsed = time.monotonic() - last_report
         if elapsed >= config.interval:
             log.info(
-                "[%s] %d messages, %d records in the last %.0fs",
+                "[%s] %d messages, %d records, %d exits in the last %.0fs",
                 area.name,
                 messages,
                 records,
+                exits,
                 elapsed,
             )
-            messages = records = 0
+            messages = records = exits = 0
             last_report += elapsed
 
 
@@ -161,13 +233,25 @@ def stream_area(config: Config, area: Area, stop: threading.Event = _stop_event)
     # As in poll_area, "id" is incremented in place: once per subscription, across reconnects.
     request_params = config.request_for(area)
     log.info("[%s] streaming → %s", area.name, area.output_path)
-    with open_sink(config, area) as sink:
-        _stream_loop(config, area, request_params, sink, stop)
+    catalog = Catalog(area=area.name, url=config.wss_url)
+    path = catalog_path_for(area.output_path, area.name)
+    try:
+        with open_sink(config, area) as sink:
+            _stream_loop(config, area, request_params, sink, stop, catalog)
+    finally:
+        if catalog.kinds:
+            catalog.write(path)
+            log.info("[%s] %d message kind(s) recorded in %s", area.name, len(catalog.kinds), path)
     log.info("[%s] stopped", area.name)
 
 
 def _stream_loop(
-    config: Config, area: Area, request_params: dict[str, Any], sink: Sink, stop: threading.Event
+    config: Config,
+    area: Area,
+    request_params: dict[str, Any],
+    sink: Sink,
+    stop: threading.Event,
+    catalog: Catalog | None = None,
 ) -> None:
     backoff = 1
     while not stop.is_set():
@@ -177,7 +261,10 @@ def _stream_loop(
                 log.info("[%s] subscribed (id=%s)", area.name, request_params["id"])
                 request_params["id"] += 1
                 backoff = 1
-                _drain(websocket, config, area, sink, stop)
+                _drain(websocket, config, area, sink, stop, catalog)
+                if catalog is not None and catalog.kinds:
+                    # Written per connection so a crash or SIGKILL still leaves the evidence.
+                    catalog.write(catalog_path_for(area.output_path, area.name))
         except (WebSocketException, OSError) as e:
             if stop.is_set():
                 break

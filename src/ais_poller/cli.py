@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from ais_poller import __version__
+from ais_poller.handoff import TOLERANCE_S, WINDOW_S
 from ais_poller.license import print_startup_notice
 from ais_poller.metadata import project_metadata
 
@@ -95,6 +96,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="NDJSON or Parquet files, or Parquet dataset directories, written by `poll`",
     )
     inspect.add_argument("--json", action="store_true", help="machine-readable output")
+
+    hand = sub.add_parser(
+        "handoffs",
+        help="pair out-of-bounding-box exits with pings in neighbouring areas",
+    )
+    hand.add_argument("root", type=Path, help="poller output directory (holds events/ and areas)")
+    hand.add_argument(
+        "--window", type=int, default=WINDOW_S, help=f"seconds after an exit (default {WINDOW_S})"
+    )
+    hand.add_argument(
+        "--tolerance",
+        type=int,
+        default=TOLERANCE_S,
+        help=f"seconds before an exit (default {TOLERANCE_S})",
+    )
+    hand.add_argument("--json", action="store_true", help="machine-readable output")
+
+    proto = sub.add_parser(
+        "protocol",
+        help="summarise the recorded EuRIS message kinds (evidence for docs/euris-protocol.md)",
+    )
+    proto.add_argument(
+        "paths", nargs="+", type=Path, help="protocol/ directory or <area>.json catalogue(s)"
+    )
+    proto.add_argument(
+        "--markdown", action="store_true", help="emit the docs/euris-protocol.md evidence section"
+    )
 
     check = sub.add_parser(
         "check",
@@ -171,6 +199,35 @@ def _inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handoffs(args: argparse.Namespace) -> int:
+    from ais_poller.handoff import (
+        discover,
+        find_handoffs,
+        format_handoffs,
+        load_exits,
+        to_json,
+    )
+
+    events, data = discover(args.root)
+    if not events.exists():
+        return _no_such_file(events)
+    exits = load_exits(events)
+    handoffs = find_handoffs(exits, data, window_s=args.window, tolerance_s=args.tolerance)
+    print(to_json(handoffs) if args.json else format_handoffs(handoffs, len(exits)))
+    return 0
+
+
+def _protocol(args: argparse.Namespace) -> int:
+    from ais_poller.protocol import format_catalog, load, merge, to_markdown
+
+    catalogs = load(args.paths)
+    if not catalogs:
+        return _no_such_file(args.paths[0])
+    catalog = merge(catalogs)
+    print(to_markdown(catalog) if args.markdown else format_catalog(catalog))
+    return 0
+
+
 def _check(args: argparse.Namespace) -> int:
     from ais_poller.conformance import check_dataset, format_result
 
@@ -208,4 +265,8 @@ def main(argv: list[str] | None = None) -> int:
         return _inspect(args)
     if args.command == "check":
         return _check(args)
+    if args.command == "handoffs":
+        return _handoffs(args)
+    if args.command == "protocol":
+        return _protocol(args)
     return _poll(args)
