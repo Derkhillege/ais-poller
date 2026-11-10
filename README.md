@@ -31,17 +31,7 @@ thread, with its own copy of the request (bounding box filled into
 `<output_path>/<name>.ndjson` unless the area sets `output`. Records are tagged with `area`.
 For a single area, list just one `[[areas]]` entry.
 
-| Flag             | Overrides    | Description                                              |
-|------------------|--------------|----------------------------------------------------------|
-| `-c/--config`    | –            | TOML config file (default `ais-poller.toml`)             |
-| `--url`          | `url`        | WebSocket URL                                            |
-| `--interval`     | `interval`   | Seconds between requests (streaming: between summary logs) |
-| `-o/--output`    | `output_path` | Output directory                                         |
-| `--format`       | `format`     | `ndjson` (default) or `parquet`                          |
-| `--rotate`       | `rotate`     | Seconds per Parquet file (default 3600)                  |
-| `--log-level`    | `$LOG_LEVEL` | Logging level (default `INFO`)                           |
-
-Stop with Ctrl-C / SIGTERM; all areas shut down together.
+Stop with Ctrl-C / SIGTERM, or set `duration` to stop by itself; all areas shut down together.
 
 ### Output formats
 
@@ -80,6 +70,75 @@ spark.read.parquet("data")  # Spark
 ```
 
 QGIS (3.28+, GDAL ≥ 3.5) opens a single `part-*.parquet` directly as a point layer.
+
+## Configuration
+
+`ais-poller.toml` (or `--config`) is the only configuration mechanism — there is no `.env` and
+no environment-variable mode apart from `$LOG_LEVEL`. Every key the poller reads is listed
+here; anything else in the file is ignored. Bad or missing values fail at startup with a
+message naming the key, before any socket is opened.
+[`ais-poller.example.toml`](ais-poller.example.toml) is a copy of this reference as a file.
+
+### Top level
+
+| Key           | Type / default                         | Flag            | Description |
+|---------------|----------------------------------------|-----------------|-------------|
+| `url`         | string, **required**                   | `--url`         | WebSocket endpoint to connect to. |
+| `interval`    | positive integer, **required**         | `--interval`    | Seconds between requests, per area. When streaming, nothing is re-requested, so it is only how often each area logs its summary line. |
+| `duration`    | positive number, default *unlimited*   | `-d/--duration` | Wall-clock seconds to run before shutting down gracefully. Omitted means run until SIGINT/SIGTERM. Fractions allowed. |
+| `output_path` | string, default `"."`                  | `-o/--output`   | Directory the per-area outputs are written under. |
+| `format`      | `"ndjson"` \| `"parquet"`, default `"ndjson"` | `--format` | `ndjson` writes raw feature lines; `parquet` parses on arrival into zstd GeoParquet. See [Output formats](#output-formats). |
+| `rotate`      | positive integer, default `3600`       | `--rotate`      | Seconds per Parquet file, aligned to UTC multiples. Only used when `format = "parquet"`. |
+
+### `[request]` — the request template (required)
+
+Sent to the server as-is, except that `params.filters.boundingBox` is always overwritten with
+the area's `bbox`. Add whatever else the endpoint expects under `params`; it is passed through
+untouched.
+
+| Key        | Type / default            | Description |
+|------------|---------------------------|-------------|
+| `method`   | string                    | `"StreamFeatures"` selects streaming mode: the request is sent once per connection and every pushed message is written. Any other method is sent every `interval` seconds, one response per request. |
+| `jsonrpc`  | string                    | JSON-RPC version, sent verbatim (`"2.0"`). |
+| `id`       | integer, default `0`      | First request id. Each area increments its own copy after every request (streaming: once per subscription), so leaving it out is fine. |
+| `params.*` | anything                  | Passed through unchanged, e.g. `params.filters.filterQuery`. `params.filters.boundingBox` is set per area and cannot be configured here. |
+
+### `[[areas]]` — one or more polled regions (at least one required)
+
+| Key      | Type / default                        | Description |
+|----------|---------------------------------------|-------------|
+| `name`   | string matching `[A-Za-z0-9_-]+`, **required** | Area label; must be unique. Used in the output path, the `area` column and the log lines. |
+| `bbox`   | `[minLat, minLon, maxLat, maxLon]`, **required** | Four numbers with `-90 <= minLat < maxLat <= 90` and `-180 <= minLon < maxLon <= 180`. |
+| `output` | string, default derived               | This area's output path, overriding the derived `<output_path>/<name>.ndjson` (or `<output_path>/area=<name>` for Parquet). Two areas may not write to the same output. |
+| `id`     | integer, default `request.id`          | This area's first request id, overriding `[request].id` for this area only. |
+
+### Flags and the environment
+
+CLI flags override the file; the file is still required (for `[request]` and `[[areas]]`).
+
+| Flag             | Overrides    | Description                                              |
+|------------------|--------------|----------------------------------------------------------|
+| `-c/--config`    | –            | TOML config file (default `ais-poller.toml`)             |
+| `--url`          | `url`        | WebSocket URL                                            |
+| `--interval`     | `interval`   | Seconds between requests (streaming: between summary logs) |
+| `-d/--duration`  | `duration`   | Seconds to run before stopping (default: until Ctrl-C)   |
+| `-o/--output`    | `output_path` | Output directory                                         |
+| `--format`       | `format`     | `ndjson` (default) or `parquet`                          |
+| `--rotate`       | `rotate`     | Seconds per Parquet file (default 3600)                  |
+| `--log-level`    | `$LOG_LEVEL` | Logging level (default `INFO`)                           |
+
+### Stopping
+
+`duration` and Ctrl-C / SIGTERM take the same shutdown path: every area finishes the message or
+tick in flight, open Parquet files are given their footer and renamed out of `.tmp`, protocol
+catalogues are written, and the process exits 0. The deadline is checked between 0.1 s joins of
+the area threads, so a run stops a fraction of a second after `duration` rather than exactly on
+it, and an in-flight request/response tick may push it slightly further. A timed run is the
+easiest way to collect a sample:
+
+```sh
+ais-poller poll -d 60 -o sample/     # one minute of data, then a clean shutdown
+```
 
 ## Parse
 

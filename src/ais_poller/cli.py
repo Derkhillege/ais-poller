@@ -58,14 +58,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--interval",
         type=int,
         help="seconds between requests, or between summary logs when streaming "
-        "(overrides interval / $INTERVAL)",
+        "(overrides interval)",
     )
     poll.add_argument(
         "-d",
         "--duration",
         type=float,
         default=None,
-        help="duration in seconds to run before stopping (default: indefinite)",
+        help="seconds to run before shutting down gracefully "
+        "(overrides duration, default: run until SIGINT/SIGTERM)",
     )
     poll.add_argument(
         "-o",

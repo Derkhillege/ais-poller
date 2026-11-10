@@ -17,35 +17,56 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Example multi-area configuration: `ais-poller poll --config ais-poller.toml`
-# Each [[areas]] entry is polled on its own WebSocket, in parallel, and written to
-# <output_path>/<name>.ndjson, or with format = "parquet" to <output_path>/area=<name>/
-# (or to its own `output` path).
+# Every key the poller reads is shown below; see "Configuration" in README.md for the
+# full reference. Keys marked (optional) can be left out and fall back to the default.
 
-url = "wss://example.com/ws"
-interval = 5          # seconds between requests, per area (StreamFeatures: between summary log lines)
+# --- Connection -------------------------------------------------------------------------
+url = "wss://example.com/ws"   # required: the EuRIS WebSocket endpoint
+
+# Seconds between requests, per area. With method = "StreamFeatures" nothing is re-requested,
+# so this is only how often the per-area summary line is logged. Required, positive integer.
+interval = 5
+
+# (optional) Stop after this many seconds and shut down gracefully, exactly as Ctrl-C does:
+# open Parquet files get their footer and are renamed, protocol catalogues are written.
+# Omit it to run until SIGINT/SIGTERM. Accepts fractions (e.g. 0.5).
 duration = 30
-output_path = "data"
-# "ndjson": raw features, one uncompressed line each (default; convert with `ais-poller parse`).
-# "parquet": parsed on arrival into zstd GeoParquet, Hive-partitioned as
-#            area=<name>/year=YYYY/month=MM/day=DD/part-<start>Z.parquet, one per `rotate` s.
-format = "ndjson"
-rotate = 3600          # seconds per Parquet file; the open file is a hidden .tmp until it closes
 
-# Request template. params.filters.boundingBox is filled in per area, and each area keeps its
-# own copy of "id", incremented after every request. With method = "StreamFeatures" it is sent
-# once per connection and every message the server pushes is written; other methods are sent
-# every `interval` seconds, one response per request.
+# --- Output -----------------------------------------------------------------------------
+# (optional, default ".") Directory the per-area outputs are written under.
+output_path = "data"
+
+# (optional, default "ndjson")
+# "ndjson": raw features, one uncompressed line each (convert with `ais-poller parse`),
+#           written to <output_path>/<name>.ndjson
+# "parquet": parsed on arrival into zstd GeoParquet, Hive-partitioned as
+#            <output_path>/area=<name>/year=YYYY/month=MM/day=DD/part-<start>Z.parquet
+format = "ndjson"
+
+# (optional, default 3600) Seconds per Parquet file, aligned to UTC multiples; the open file
+# is a hidden .tmp until it closes. Only used when format = "parquet".
+rotate = 3600
+
+# --- Request template -------------------------------------------------------------------
+# Required. Sent as-is except for params.filters.boundingBox, which is filled in per area.
+# Each area keeps its own copy of "id", incremented after every request. With
+# method = "StreamFeatures" it is sent once per connection and every pushed message is
+# written; any other method is sent every `interval` seconds, one response per request.
 [request]
 jsonrpc = "2.0"
 method = "StreamFeatures"
-params.filters.filterQuery = "()"
+# id = 0                        # (optional, default 0) first request id; incremented per request
+params.filters.filterQuery = "()"   # params.* are passed through untouched
 
+# --- Areas ------------------------------------------------------------------------------
+# At least one entry. Each is polled on its own WebSocket, in its own thread, with its own
+# request id counter and its own output file. Two areas may not write to the same output.
 [[areas]]
-name = "moerdijk"
-bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # [minLat, minLon, maxLat, maxLon]
-
+name = "moerdijk"                                      # required: [A-Za-z0-9_-]+, unique
+bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # required: [minLat, minLon, maxLat, maxLon]
 
 [[areas]]
 name = "rotterdam"
 bbox = [51.85, 4.25, 51.95, 4.55]
-output = "data/rotterdam-port.ndjson"   # optional: the NDJSON file or the Parquet directory
+output = "data/rotterdam-port.ndjson"   # (optional) this area's NDJSON file or Parquet directory
+# id = 100                              # (optional) this area's first request id, overrides request.id

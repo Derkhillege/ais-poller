@@ -120,7 +120,14 @@ def load_config(
     if not isinstance(rotate, int) or isinstance(rotate, bool) or rotate <= 0:
         raise SystemExit(f"{path}: 'rotate' (or --rotate) must be a positive integer")
 
-    output_path = output_path or Path(data.get("output_path", "."))
+    duration = duration if duration is not None else data.get("duration")
+    if duration is not None and (
+        not isinstance(duration, int | float) or isinstance(duration, bool) or duration <= 0
+    ):
+        raise SystemExit(
+            f"{path}: 'duration' (or --duration) must be a positive number of seconds (or omitted)"
+        )
+
     raw_areas = data.get("areas")
     if not isinstance(raw_areas, list) or not raw_areas:
         raise SystemExit(f"{path}: at least one [[areas]] entry is required")
@@ -137,6 +144,8 @@ def load_config(
         seen.add(name)
 
         area_id = raw.get("id")
+        if area_id is not None and (not isinstance(area_id, int) or isinstance(area_id, bool)):
+            raise SystemExit(f"{where}: 'id' must be an integer (or omitted)")
 
         if "output" in raw:
             output = Path(raw["output"])
@@ -150,7 +159,15 @@ def load_config(
     if len(set(outputs)) != len(outputs):
         raise SystemExit(f"{path}: areas must write to distinct outputs")
 
-    return Config(wss_url, interval, request, tuple(areas), fmt, rotate, duration=duration)
+    return Config(
+        wss_url,
+        interval,
+        request,
+        tuple(areas),
+        fmt,
+        rotate,
+        duration=float(duration) if duration is not None else None,
+    )
 
 
 def _check_bbox(bbox: Any, where: str) -> tuple[float, float, float, float]:
