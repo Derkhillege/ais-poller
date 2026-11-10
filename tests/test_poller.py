@@ -23,9 +23,12 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+import pyarrow.parquet as pq
+
 from ais_poller import poller
 from ais_poller.config import Area, Config
 from ais_poller.poller import poll_area, poll_once
+from ais_poller.sink import NdjsonSink
 
 
 class FakeWebSocket:
@@ -46,26 +49,26 @@ def test_poll_once_appends_stamped_features(tmp_path):
     features = [{"id": "1"}, {"id": "2"}]
     ws = FakeWebSocket(json.dumps({"result": {"features": features}}))
 
-    n = poll_once(ws, {"id": 7}, out)
+    n = poll_once(ws, {"id": 7}, NdjsonSink(out))
 
     assert n == 2
     assert json.loads(ws.sent[0]) == {"id": 7}
     lines = [json.loads(line) for line in out.read_text().splitlines()]
     assert lines[0] == {"existing": True}
     assert [r["id"] for r in lines[1:]] == ["1", "2"]
-    assert all(datetime.fromisoformat(r["requested_at"]).tzinfo for r in lines[1:])
+    assert all(datetime.fromisoformat(r["timestamp"]).tzinfo for r in lines[1:])
 
 
 def test_poll_once_without_features_writes_nothing(tmp_path):
     out = tmp_path / "out.json"
-    assert poll_once(FakeWebSocket('{"jsonrpc": "2.0"}'), {"id": 1}, out) == 0
+    assert poll_once(FakeWebSocket('{"jsonrpc": "2.0"}'), {"id": 1}, NdjsonSink(out)) == 0
     assert out.read_text() == ""
 
 
 def test_poll_once_tags_area(tmp_path):
     out = tmp_path / "out.json"
     ws = FakeWebSocket(json.dumps({"result": {"features": [{"id": "1"}]}}))
-    poll_once(ws, {"id": 1}, out, area="north")
+    poll_once(ws, {"id": 1}, NdjsonSink(out, "north"))
     assert json.loads(out.read_text())["area"] == "north"
 
 
@@ -86,6 +89,19 @@ class ScriptedWebSocket(FakeWebSocket):
 
     def __exit__(self, *exc):
         return False
+
+
+def test_poll_area_without_a_request_id(tmp_path, monkeypatch):
+    """A [request] table with no id must not crash the tick loop."""
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
+    config = Config("wss://example/ws", 0, {"jsonrpc": "2.0", "params": {"filters": {}}}, (area,))
+    stop = threading.Event()
+    socket = ScriptedWebSocket(stop, ticks=2)
+    monkeypatch.setattr(poller, "connect", lambda _url: socket)
+
+    poll_area(config, area, stop)
+
+    assert [json.loads(m)["id"] for m in socket.sent] == [0, 1]
 
 
 def test_areas_poll_independently(tmp_path, monkeypatch):
@@ -219,7 +235,7 @@ def _push_msg(*ids: str) -> str:
 
 def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
     """After the snapshot, featureStream notifications are written as records, not ignored."""
-    area = Area("north", None, tmp_path / "north.ndjson")
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
     config = Config("wss://example/ws", 10, {"id": 1, "method": "StreamFeatures"}, (area,))
     stop = threading.Event()
     ws = StreamingWebSocket(stop, [_features_msg("a"), _push_msg("181"), _push_msg("26", "39")])
@@ -231,12 +247,12 @@ def test_stream_writes_pushed_feature_updates(tmp_path, monkeypatch, caplog):
     lines = [json.loads(line) for line in area.output_path.read_text().splitlines()]
     assert [r["id"] for r in lines] == ["a", "181", "26", "39"]
     assert lines[1]["properties"] == {"Id": "181"}
-    assert all("requested_at" in r and r["area"] == "north" for r in lines)
+    assert all("timestamp" in r and r["area"] == "north" for r in lines)
     assert "non-feature message" not in caplog.text
 
 
 def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch):
-    area = Area("north", None, tmp_path / "north.ndjson")
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "north.ndjson")
     config = Config("wss://example/ws", 10, {"id": 5, "method": "StreamFeatures"}, (area,))
     stop = threading.Event()
     sockets = [
@@ -256,7 +272,7 @@ def test_stream_resubscribes_with_next_id_after_reconnect(tmp_path, monkeypatch)
 
 
 def test_streaming_follows_request_method():
-    areas = (Area("x", None, Path("x.ndjson")),)
+    areas = (Area("x", (51.0, 4.0, 52.0, 5.0), Path("x.ndjson")),)
     assert Config("wss://e", 10, {"id": 1, "method": "StreamFeatures"}, areas).streaming
     assert not Config("wss://e", 10, {"id": 1, "method": "GetFeatures"}, areas).streaming
 
@@ -300,3 +316,35 @@ def test_run_fails_fast_on_worker_thread_crash(monkeypatch, tmp_path):
     monkeypatch.setattr(poller, "poll_area", crashing_poll_area)
     with pytest.raises(RuntimeError, match="terminated unexpectedly"):
         poller.run(config)
+
+
+def test_stream_to_parquet_survives_reconnect_and_closes_on_stop(tmp_path, monkeypatch):
+    """format="parquet": one file across reconnects, parsed records, renamed on stop."""
+    area = Area("north", (51.0, 4.0, 52.0, 5.0), tmp_path / "area=north")
+    request = {"id": 1, "method": "StreamFeatures"}
+    config = Config("wss://example/ws", 10, request, (area,), format="parquet")
+    stop = threading.Event()
+
+    def vessel(track: str) -> dict:
+        return {
+            "type": "Feature",
+            "id": track,
+            "properties": {"Lat": 51.5, "Lon": 4.5, "TrackID": track},
+        }
+
+    snapshot = json.dumps({"result": {"features": [vessel("1"), vessel("2")]}})
+    push = json.dumps({"method": "featureStream", "params": [json.dumps(vessel("3"))]})
+    sockets = [
+        StreamingWebSocket(stop, [snapshot], end=OSError("reset")),
+        StreamingWebSocket(stop, [push]),
+    ]
+    monkeypatch.setattr(poller, "connect", lambda _url: sockets.pop(0))
+    monkeypatch.setattr(stop, "wait", lambda _t=None: False)
+
+    poller.stream_area(config, area, stop)
+
+    assert list(tmp_path.rglob("*.tmp")) == []
+    (path,) = tmp_path.rglob("*.parquet")
+    table = pq.read_table(path)
+    assert table.column("mmsi").to_pylist() == ["1", "2", "3"]
+    assert table.column("vessel_name").to_pylist()[0] == "Track 1"

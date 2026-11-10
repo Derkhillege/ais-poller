@@ -25,7 +25,7 @@ requires-python = ">=3.13"
 authors = [{ name = "Derk Hillege", email = "derkhillege@protonmail.com" }]
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-keywords = ["ais", "euris", "vessel", "websocket", "ndjson"]
+keywords = ["ais", "euris", "vessel", "websocket", "ndjson", "parquet", "geoparquet"]
 classifiers = [
     "Environment :: Console",
     "Programming Language :: Python :: 3",
@@ -34,7 +34,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "python-dotenv>=1.2.2",
+    "pyarrow>=25.0.1",
     "websockets>=16.0",
 ]
 

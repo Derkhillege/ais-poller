@@ -18,12 +18,18 @@
 
 # Example multi-area configuration: `ais-poller poll --config ais-poller.toml`
 # Each [[areas]] entry is polled on its own WebSocket, in parallel, and written to
-# <output_dir>/<name>.ndjson (or to its own `output` path).
+# <output_path>/<name>.ndjson, or with format = "parquet" to <output_path>/area=<name>/
+# (or to its own `output` path).
 
 url = "wss://example.com/ws"
 interval = 5          # seconds between requests, per area (StreamFeatures: between summary log lines)
 duration = 30
-output_dir = "data"
+output_path = "data"
+# "ndjson": raw features, one uncompressed line each (default; convert with `ais-poller parse`).
+# "parquet": parsed on arrival into zstd GeoParquet, Hive-partitioned as
+#            area=<name>/year=YYYY/month=MM/day=DD/part-<start>Z.parquet, one per `rotate` s.
+format = "ndjson"
+rotate = 3600          # seconds per Parquet file; the open file is a hidden .tmp until it closes
 
 # Request template. params.filters.boundingBox is filled in per area, and each area keeps its
 # own copy of "id", incremented after every request. With method = "StreamFeatures" it is sent
@@ -38,7 +44,8 @@ params.filters.filterQuery = "()"
 name = "moerdijk"
 bbox = [51.6039111, 4.2397334, 51.785393, 4.5386026]   # [minLat, minLon, maxLat, maxLon]
 
+
 [[areas]]
 name = "rotterdam"
 bbox = [51.85, 4.25, 51.95, 4.55]
-output = "data/rotterdam-port.ndjson"   # optional, overrides output_dir/<name>.ndjson
+output = "data/rotterdam-port.ndjson"   # optional: the NDJSON file or the Parquet directory

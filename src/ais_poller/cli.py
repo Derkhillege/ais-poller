@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from ais_poller import __version__
+from ais_poller.handoff import TOLERANCE_S, WINDOW_S
 from ais_poller.license import print_startup_notice
 from ais_poller.metadata import project_metadata
 
@@ -42,15 +43,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    poll = sub.add_parser("poll", help="poll the WebSocket and append features as NDJSON (default)")
-    source = poll.add_mutually_exclusive_group()
-    source.add_argument(
-        "-c", "--config", type=Path, help="TOML config with one or more areas, polled in parallel"
+    poll = sub.add_parser(
+        "poll", help="poll the WebSocket and write NDJSON or GeoParquet (default command)"
     )
-    source.add_argument(
-        "--env-file", type=Path, help="load env vars from this file instead of .env"
+    poll.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        default=Path("ais-poller.toml"),
+        help="TOML config listing the areas to poll in parallel (default: ais-poller.toml)",
     )
-    poll.add_argument("--url", help="WebSocket URL (overrides url / $EURIS_WSS)")
+    poll.add_argument("--url", help="WebSocket URL (overrides url)")
     poll.add_argument(
         "--interval",
         type=int,
@@ -68,8 +71,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         type=Path,
-        help="with --config: output directory (overrides output_dir); "
-        "otherwise: NDJSON output file (overrides $OUTPUT_PATH)",
+        help="output directory for the area files (overrides output_path)",
+    )
+    poll.add_argument(
+        "--format",
+        choices=["ndjson", "parquet"],
+        help="ndjson: raw features, uncompressed; parquet: parsed records as zstd GeoParquet "
+        "(overrides format, default ndjson)",
+    )
+    poll.add_argument(
+        "--rotate", type=int, help="seconds per Parquet file (overrides rotate, default 3600)"
     )
 
     parse = sub.add_parser("parse", help="convert poller NDJSON into flat vessel records")
@@ -77,11 +88,49 @@ def _build_parser() -> argparse.ArgumentParser:
     parse.add_argument("-o", "--output", type=Path, help="output file (default: stdout)")
     parse.add_argument("--format", choices=["csv", "ndjson"], default="csv", help="default: csv")
 
-    inspect = sub.add_parser(
-        "inspect", help="summarise poller NDJSON files (ticks, gaps, areas, extent)"
+    inspect = sub.add_parser("inspect", help="summarise poller output (ticks, gaps, areas, extent)")
+    inspect.add_argument(
+        "files",
+        nargs="+",
+        type=Path,
+        help="NDJSON or Parquet files, or Parquet dataset directories, written by `poll`",
     )
-    inspect.add_argument("files", nargs="+", type=Path, help="NDJSON files written by `poll`")
     inspect.add_argument("--json", action="store_true", help="machine-readable output")
+
+    hand = sub.add_parser(
+        "handoffs",
+        help="pair out-of-bounding-box exits with pings in neighbouring areas",
+    )
+    hand.add_argument("root", type=Path, help="poller output directory (holds events/ and areas)")
+    hand.add_argument(
+        "--window", type=int, default=WINDOW_S, help=f"seconds after an exit (default {WINDOW_S})"
+    )
+    hand.add_argument(
+        "--tolerance",
+        type=int,
+        default=TOLERANCE_S,
+        help=f"seconds before an exit (default {TOLERANCE_S})",
+    )
+    hand.add_argument("--json", action="store_true", help="machine-readable output")
+
+    proto = sub.add_parser(
+        "protocol",
+        help="summarise the recorded EuRIS message kinds (evidence for docs/euris-protocol.md)",
+    )
+    proto.add_argument(
+        "paths", nargs="+", type=Path, help="protocol/ directory or <area>.json catalogue(s)"
+    )
+    proto.add_argument(
+        "--markdown", action="store_true", help="emit the docs/euris-protocol.md evidence section"
+    )
+
+    check = sub.add_parser(
+        "check",
+        help="verify Parquet output against the ais-shader GeoParquet specification",
+    )
+    check.add_argument(
+        "paths", nargs="+", type=Path, help="Parquet file(s) or dataset directory(ies)"
+    )
 
     lic = sub.add_parser("license", help="show this program's GPL licensing notice")
     details = lic.add_mutually_exclusive_group()
@@ -99,26 +148,42 @@ def _poll(args: argparse.Namespace) -> int:
     from ais_poller.poller import run
 
     config = load_config(
-        getattr(args, "env_file", None),
-        config_file=getattr(args, "config", None),
+        getattr(args, "config", Path("ais-poller.toml")),
         wss_url=getattr(args, "url", None),
         interval=getattr(args, "interval", None),
         output_path=getattr(args, "output", None),
         duration=getattr(args, "duration", None),
+        fmt=getattr(args, "format", None),
+        rotate=getattr(args, "rotate", None),
     )
     run(config)
     return 0
 
 
+#: Exit code for a missing input file, as argparse uses for a usage error.
+MISSING_FILE = 2
+
+
+def _no_such_file(path: object) -> int:
+    """Report a missing input file the way a CLI should: a message, not a traceback."""
+    print(f"no such file: {path}", file=sys.stderr)
+    return MISSING_FILE
+
+
 def _parse(args: argparse.Namespace) -> int:
     from ais_poller.parse import parse_file
 
-    if args.output is None:
-        n = parse_file(args.input, sys.stdout, args.format)
-    else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", newline="", encoding="utf-8") as out:
-            n = parse_file(args.input, out, args.format)
+    if not args.input.is_file():  # checked up front, so no partial output is written
+        return _no_such_file(args.input)
+    try:
+        if args.output is None:
+            n = parse_file(args.input, sys.stdout, args.format)
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", newline="", encoding="utf-8") as out:
+                n = parse_file(args.input, out, args.format)
+    except FileNotFoundError as e:  # lost between the check and the read
+        return _no_such_file(e.filename or args.input)
     logging.getLogger("ais_poller").info("parsed %d records", n)
     return 0
 
@@ -126,9 +191,49 @@ def _parse(args: argparse.Namespace) -> int:
 def _inspect(args: argparse.Namespace) -> int:
     from ais_poller.report import format_report, inspect_file, to_json
 
-    reports = [inspect_file(p) for p in args.files]
+    try:
+        reports = [inspect_file(p) for p in args.files]
+    except FileNotFoundError as e:
+        return _no_such_file(e.filename or args.files[0])
     print(to_json(reports) if args.json else "\n\n".join(format_report(r) for r in reports))
     return 0
+
+
+def _handoffs(args: argparse.Namespace) -> int:
+    from ais_poller.handoff import (
+        discover,
+        find_handoffs,
+        format_handoffs,
+        load_exits,
+        to_json,
+    )
+
+    events, data = discover(args.root)
+    if not events.exists():
+        return _no_such_file(events)
+    exits = load_exits(events)
+    handoffs = find_handoffs(exits, data, window_s=args.window, tolerance_s=args.tolerance)
+    print(to_json(handoffs) if args.json else format_handoffs(handoffs, len(exits)))
+    return 0
+
+
+def _protocol(args: argparse.Namespace) -> int:
+    from ais_poller.protocol import format_catalog, load, merge, to_markdown
+
+    catalogs = load(args.paths)
+    if not catalogs:
+        return _no_such_file(args.paths[0])
+    catalog = merge(catalogs)
+    print(to_markdown(catalog) if args.markdown else format_catalog(catalog))
+    return 0
+
+
+def _check(args: argparse.Namespace) -> int:
+    from ais_poller.conformance import check_dataset, format_result
+
+    results = [check_dataset(p) for p in args.paths]
+    print("\n\n".join(format_result(r) for r in results))
+    return 0 if all(r.ok for r in results) else 1
 
 
 def _license(args: argparse.Namespace) -> int:
@@ -158,4 +263,10 @@ def main(argv: list[str] | None = None) -> int:
         return _parse(args)
     if args.command == "inspect":
         return _inspect(args)
+    if args.command == "check":
+        return _check(args)
+    if args.command == "handoffs":
+        return _handoffs(args)
+    if args.command == "protocol":
+        return _protocol(args)
     return _poll(args)

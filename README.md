@@ -1,10 +1,11 @@
 # ais-poller
 
-Polls the EuRIS AIS WebSocket and appends every returned vessel feature as one JSON line
-(NDJSON) to a file, then parses those files into flat vessel records (CSV or NDJSON).
+Polls the EuRIS AIS WebSocket and writes every returned vessel feature either as one raw JSON
+line (NDJSON) per feature, or parsed on arrival into flat vessel records in compressed
+GeoParquet. NDJSON files are converted afterwards with `parse` (CSV or NDJSON).
 
-Both commands stream line by line, so memory stays flat no matter how long the poller runs
-or how large the output file grows.
+Everything streams, so memory stays flat no matter how long the poller runs or how large the
+output grows.
 
 ## Install
 
@@ -17,40 +18,68 @@ uv run ais-poller --help
 
 ## Poll
 
-### Multiple areas in parallel (TOML config)
-
 ```sh
 cp ais-poller.example.toml ais-poller.toml   # edit url, interval, request and areas
-ais-poller poll --config ais-poller.toml
+ais-poller poll                              # reads ./ais-poller.toml; `poll` is the default command
+ais-poller poll --config other.toml --interval 30 -o out/
 ```
 
 The config holds a shared request template and a list of `[[areas]]`, each with a `name` and a
 `bbox = [minLat, minLon, maxLat, maxLon]`. Every area is polled on its own WebSocket in its own
 thread, with its own copy of the request (bounding box filled into
 `params.filters.boundingBox`, own `id` counter) and its own output file,
-`<output_dir>/<name>.ndjson` unless the area sets `output`. Records are tagged with `area`.
-`--url`, `--interval` and `-o` (the output directory) override the file.
+`<output_path>/<name>.ndjson` unless the area sets `output`. Records are tagged with `area`.
+For a single area, list just one `[[areas]]` entry.
 
-### Single area (env vars)
+| Flag             | Overrides    | Description                                              |
+|------------------|--------------|----------------------------------------------------------|
+| `-c/--config`    | –            | TOML config file (default `ais-poller.toml`)             |
+| `--url`          | `url`        | WebSocket URL                                            |
+| `--interval`     | `interval`   | Seconds between requests (streaming: between summary logs) |
+| `-o/--output`    | `output_path` | Output directory                                         |
+| `--format`       | `format`     | `ndjson` (default) or `parquet`                          |
+| `--rotate`       | `rotate`     | Seconds per Parquet file (default 3600)                  |
+| `--log-level`    | `$LOG_LEVEL` | Logging level (default `INFO`)                           |
 
-```sh
-ais-poller poll            # `poll` is the default command, so plain `ais-poller` works too
-ais-poller poll --interval 30 -o out/ais.ndjson --env-file prod.env
+Stop with Ctrl-C / SIGTERM; all areas shut down together.
+
+### Output formats
+
+**`format = "ndjson"`** (default, uncompressed): each line is the raw GeoJSON Feature plus a
+`timestamp` UTC timestamp and the `area` name, appended as it arrives. Nothing is lost on a
+hard kill. Convert with `ais-poller parse`.
+
+**`format = "parquet"`** (compressed): every feature is parsed on arrival (same columns as
+[Parse](#parse), `base_date_time` as a UTC timestamp) and streamed into zstd Parquet, around
+50× smaller than the raw NDJSON. The layout is a Hive-partitioned dataset with one directory
+per area and day:
+
+```
+data/area=moerdijk/year=2026/month=09/day=26/part-20260926T010000Z.parquet
+data/area=moerdijk/year=2026/month=09/day=26/.part-20260926T020000Z.parquet.tmp   ← still being written
 ```
 
-Without `--config`, configuration comes from env vars (or a `.env` file, see `.env.example`) and
-`REQUEST_PARAMS` is sent as is. CLI flags override them.
+Each area thread writes its own files, and a new file starts every `rotate` seconds (aligned to
+UTC). A Parquet file is only readable once it is closed, so the open file is a hidden `.tmp` that
+is renamed on rotation and on Ctrl-C / SIGTERM. A hard kill (SIGKILL, power loss) loses the open
+window. Files carry GeoParquet metadata and a WKB `geometry` point column next to
+`latitude`/`longitude`.
 
-| Env var          | Flag           | Required | Description                                                  |
-|------------------|----------------|----------|--------------------------------------------------------------|
-| `EURIS_WSS`      | `--url`        | yes      | WebSocket URL                                                |
-| `REQUEST_PARAMS` | –              | yes      | JSON-RPC request object; its numeric `id` increments each tick |
-| `INTERVAL`       | `--interval`   | yes      | Seconds between requests                                     |
-| `OUTPUT_PATH`    | `-o/--output`  | no       | NDJSON output path (default `data.json`)                     |
-| `LOG_LEVEL`      | `--log-level`  | no       | Logging level (default `INFO`)                               |
+Read the whole dataset in parallel with any engine; `area` and `date` come from the paths:
 
-Each line is the raw GeoJSON Feature plus a `requested_at` UTC timestamp and the `area` name.
-Stop with Ctrl-C / SIGTERM; all areas shut down together.
+```sql
+-- DuckDB
+SELECT area, count(*), count(DISTINCT mmsi)
+FROM read_parquet('data/**/*.parquet', hive_partitioning = true) GROUP BY area;
+```
+
+```python
+pl.scan_parquet("data/**/*.parquet", hive_partitioning=True)  # Polars (lazy)
+pd.read_parquet("data")  # pandas (pyarrow)
+spark.read.parquet("data")  # Spark
+```
+
+QGIS (3.28+, GDAL ≥ 3.5) opens a single `part-*.parquet` directly as a point layer.
 
 ## Parse
 
@@ -64,7 +93,7 @@ Output columns:
 | Column           | Source                                                        |
 |------------------|---------------------------------------------------------------|
 | `mmsi`           | `MMSI`, falling back to `TrackID` / feature id when `0`       |
-| `base_date_time` | `requested_at`                                                |
+| `base_date_time` | `timestamp`                                                |
 | `latitude`, `longitude` | `Lat`/`Lon`, falling back to the geometry              |
 | `sog`, `cog`     | `SOG`, `COG`                                                  |
 | `heading`        | `TH` if > 0, else `COG`                                       |
@@ -79,10 +108,11 @@ Lines that are not valid JSON or cannot be parsed are skipped and counted in a w
 
 ```sh
 ais-poller inspect data/*.ndjson          # per-file summary
+ais-poller inspect data/area=moerdijk     # a Parquet dataset directory (or single .parquet)
 ais-poller inspect --json data/*.ndjson   # machine-readable
 ```
 
-Streams each file and reports record/tick counts, time span, median tick interval, records per
+Streams each file or dataset and reports record/tick counts, time span, median tick interval, records per
 tick, distinct vessels, lat/lon extent, records per area, bad lines, out-of-order ticks and every
 gap longer than 3× the median interval.
 
@@ -91,7 +121,7 @@ gap longer than 3× the median interval.
 The devcontainer cannot reach the EuRIS site, so live runs happen on a local machine:
 
 ```sh
-ais-poller poll --config ais-poller.toml 2> poll.log     # let it run, then Ctrl-C
+ais-poller poll 2> poll.log     # let it run, then Ctrl-C
 ais-poller inspect data/*.ndjson > inspect.txt
 ```
 
@@ -141,3 +171,73 @@ ais-poller is free software under the GNU General Public License, version 3 or (
 any later version — see [LICENSE](LICENSE). Started interactively it prints the short GPL
 notice to stderr; `ais-poller license`, `ais-poller license --warranty` and
 `ais-poller license --conditions` print it and the details on demand.
+
+## What EuRIS actually sends
+
+The AISTracks socket is undocumented, so every streaming run records the message kinds it sees
+to `<output_dir>/protocol/<area>.json` — one entry per distinct message signature with its
+count, first and last sighting, and one truncated sample (shapes, not a position archive).
+Catalogues are written after each connection, so an interrupted run still leaves its evidence.
+
+```sh
+ais-poller protocol data/protocol              # table of message kinds, most frequent first
+ais-poller protocol data/protocol --markdown   # evidence section for docs/euris-protocol.md
+```
+
+[`docs/euris-protocol.md`](docs/euris-protocol.md) records what is **observed** versus what is
+still **assumed**, and is how an assumption gets promoted: paste the generated section in.
+
+## Area handoffs
+
+A subscription only reports tracks inside its own bounding box, so EuRIS announces a vessel
+leaving one with an `outOfBoundingBox` notification. Those are recorded per area as JSON lines
+in `<output_dir>/events/<area>.ndjson`, deliberately outside the vessel dataset:
+
+```json
+{"event": "exit", "area": "moerdijk", "observed_at": "2026-09-26T10:00:00+00:00",
+ "track_id": "…", "mmsi": 244660000, "latitude": 51.7, "longitude": 4.3, "raw": {…}}
+```
+
+With adjoining areas, pairing an exit with the next ping of the same track elsewhere gives the
+crossing:
+
+```sh
+ais-poller handoffs data                      # data/ holds events/ and the area datasets
+ais-poller handoffs data --window 1800 --json # widen the match window, machine-readable
+```
+
+```text
+exits: 2  handoffs: 1
+       track  from         to              gap_s  exit_at
+        t-1   moerdijk     rotterdam        30.0  2026-09-26T10:00:00+00:00
+```
+
+Each exit is matched to the *earliest* ping of that track in a different area within
+`--window` seconds after it (and `--tolerance` seconds before it, for overlapping boxes or clock
+skew), on either `track_id` or `mmsi`. It reads NDJSON and Parquet areas alike and streams them,
+so memory grows with the number of exits, not the number of records.
+
+## Conformance with `ais-shader`
+
+The Parquet output follows the GeoParquet dataset specification of
+[TUDelft-CITG/ais-colab](https://github.com/TUDelft-CITG/ais-colab)
+(`docs/geoparquet_specification.md`): WKB `Point` geometry in WGS84 with GeoParquet `geo`
+metadata, the spec's default column names and types (`mmsi`, `base_date_time` as
+`timestamp[us, UTC]`, `longitude`, `latitude`, `sog`, `cog`, `heading`, `length`, `beam`,
+`shiptypeAIS`, `status`), and Hive `year=`/`month=`/`day=` partition directories that
+`ais_shader.data_loader.detect_hive_partitioning()` discovers.
+
+### Testing conformance
+
+```sh
+ais-poller check data/area=moerdijk        # a dataset directory, or single .parquet files
+ais-poller check local-runs/2026-09-26/*.parquet
+```
+
+It reports the file and row count, the partition keys it found, and every deviation from the
+spec (missing or wrongly typed columns, absent `geo` metadata, a non-Hive layout, values outside
+the documented ranges such as `sog` over 102.2 kn or a `heading` that is neither < 360 nor 511).
+Exit status is 0 when the dataset conforms and 1 when it does not, so it drops into CI or a
+post-run script. The same checks run in `uv run pytest tests/test_conformance.py`, which writes
+a small dataset through the real sink, re-reads it with `pyarrow.dataset(..., partitioning="hive")`
+the way the pipeline does, and asserts that a flat or metadata-less dataset is rejected.

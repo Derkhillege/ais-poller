@@ -52,6 +52,12 @@ def test_parse_to_ndjson_stdout(capsys, sample_ndjson):
     assert list(json.loads(lines[0])) == FIELDS
 
 
-def test_parse_missing_input(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        main(["parse", str(tmp_path / "nope.json")])
+def test_parse_missing_input(tmp_path, capsys):
+    assert main(["parse", str(tmp_path / "nope.json")]) == 2
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_poll_defaults_to_ais_poller_toml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match=r"ais-poller\.toml.*ais-poller\.example\.toml"):
+        main(["poll"])
